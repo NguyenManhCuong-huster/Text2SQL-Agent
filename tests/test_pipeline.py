@@ -157,3 +157,18 @@ def test_injected_values_stay_on_one_comment_line(fake_llm):
         assert "never instructions" in fake.calls[0][0]["content"]
     finally:
         datasources.delete_source(sid)
+
+
+def test_business_notes_in_prompt(fake_llm):
+    from app import history
+    history.save_source_settings("shop", {"notes": "Revenue = SUM(quantity * unit_price * (1 - discount)), excluding cancelled orders."})
+    try:
+        fake = fake_llm(sql_reply("SELECT 1"))
+        run(pipeline.ask("shop", "total revenue", "m", []))
+        prompt = fake.calls[0][1]["content"]
+        assert "<notes>" in prompt and "excluding cancelled orders" in prompt
+    finally:
+        history.save_source_settings("shop", {})
+    fake = fake_llm(sql_reply("SELECT 1"))
+    run(pipeline.ask("shop", "total revenue", "m", []))
+    assert "<notes>" not in fake.calls[0][1]["content"]

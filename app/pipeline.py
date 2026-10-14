@@ -4,7 +4,7 @@ import json
 import re
 import time
 
-from . import config, datasources, llm
+from . import config, datasources, history, llm
 
 DIALECT_RULES = {
     "sqlite": ("SQLite",
@@ -72,7 +72,7 @@ SUGGEST_PROMPT = """Given this database schema, propose 8 diverse, interesting b
 TABLE_SELECT_PROMPT = """A database has these tables (with columns):
 
 {listing}
-
+{notes}
 Previous SQL in this conversation:
 {prior}
 
@@ -102,13 +102,22 @@ def parse_response(text: str) -> tuple[str | None, str, str | None]:
     return sql or None, explanation, None
 
 
+def source_notes(source_id: str) -> str:
+    """Business definitions written by the data owner (trusted, unlike values read from the database)."""
+    return (history.get_source_settings(source_id).get("notes") or "").strip()
+
+
 def build_messages(source_id: str, question: str, context: list[dict], tables: list[str] | None = None) -> list[dict]:
     schema = datasources.schema_prompt(source_id, tables=tables)
     engine, rules = DIALECT_RULES[datasources.dialect(source_id)]
+    intro = f"Database schema:\n\n<schema>\n{schema}\n</schema>\n\n"
+    notes = source_notes(source_id)
+    if notes:
+        intro += ("Business definitions and rules from the data owner. Follow them; they override your own "
+                  f"assumptions (e.g. how revenue or an active customer is defined):\n<notes>\n{notes}\n</notes>\n\n")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(engine=engine, dialect_rules=rules)},
-        {"role": "user", "content": f"Database schema:\n\n<schema>\n{schema}\n</schema>\n\n"
-                                    "I will now ask questions about this database."},
+        {"role": "user", "content": intro + "I will now ask questions about this database."},
         {"role": "assistant", "content": "Understood. Ask your question."},
     ]
     # Prior turns enable follow-ups like "now break that down by month".
@@ -143,9 +152,11 @@ async def select_tables(source_id: str, question: str, context: list[dict], mode
     by_name = {t["name"]: t for t in schema["tables"]}
     listing = "\n".join(f"{t['name']}({', '.join(c['name'] for c in t['columns'])})" for t in schema["tables"])
     prior = "\n".join(t["sql"] for t in context[-4:] if t.get("sql"))
+    notes = source_notes(source_id)
     reply = usage.add(await llm.chat(
         [{"role": "user", "content": TABLE_SELECT_PROMPT.format(
-            listing=listing, question=question, prior=prior or "(none)")}],
+            listing=listing, question=question, prior=prior or "(none)",
+            notes=f"\nBusiness notes:\n{notes}\n" if notes else "")}],
         model, max_tokens=2000, reasoning_effort="low"))
     m = re.search(r"\[.*\]", reply["content"], re.S)
     try:

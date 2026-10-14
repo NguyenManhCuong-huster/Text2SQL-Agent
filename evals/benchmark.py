@@ -18,6 +18,7 @@ accuracy only.
 import argparse
 import asyncio
 import json
+import os
 import random
 import shutil
 import sys
@@ -26,8 +27,11 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from app import config, datasources, history, pipeline
-from evals.run import _is_ordered, results_match
+# Keep benchmark databases and history out of the app's own DATA_DIR (they would show up in the UI).
+os.environ.setdefault("DATA_DIR", str(Path(__file__).resolve().parent.parent / "data" / "benchmarks" / "appdata"))
+
+from app import config, datasources, history, pipeline  # noqa: E402
+from evals.run import _is_ordered, results_match  # noqa: E402
 
 HERE = Path(__file__).parent
 GOLD_ROWS = 100_000
@@ -66,7 +70,8 @@ def strict_match(gold: dict, pred: dict) -> bool:
     return as_set(gold["rows"]) == as_set(pred["rows"])
 
 
-async def run_case(case: dict, sid: str, model: str, sem: asyncio.Semaphore, candidates: int) -> dict:
+async def run_case(case: dict, sid: str, model: str, sem: asyncio.Semaphore, candidates: int,
+                   style: str = "exact") -> dict:
     out_row = {"id": case["id"], "db_id": case["db_id"], "level": case["level"], "model": model,
                "question": case["question"], "gold_sql": case["sql"]}
     try:
@@ -76,7 +81,8 @@ async def run_case(case: dict, sid: str, model: str, sem: asyncio.Semaphore, can
     async with sem:
         t = time.perf_counter()
         try:
-            out = await pipeline.ask(sid, case["question"], model, [], use_cache=False, candidates=candidates)
+            out = await pipeline.ask(sid, case["question"], model, [], use_cache=False, candidates=candidates,
+                                     style=style)
         except Exception as e:  # noqa: BLE001 - provider/network errors count as failures
             out = {"status": "error", "error": str(e), "sql": None, "result": None, "attempts": [], "cost": 0}
         latency = time.perf_counter() - t
@@ -129,6 +135,8 @@ async def main() -> int:
     ap.add_argument("--level", default="", help="only this difficulty (simple/moderate/challenging, easy/...)")
     ap.add_argument("--concurrency", type=int, default=6)
     ap.add_argument("--candidates", type=int, default=1)
+    ap.add_argument("--style", choices=["exact", "friendly"], default="exact",
+                    help="output style: exact (default, what benchmarks expect) or friendly (the UI's style)")
     ap.add_argument("--timeout", type=float, default=30, help="SQL time limit in seconds (BIRD has large tables)")
     ap.add_argument("--keep-policy", action="store_true", help="keep HIDDEN_COLUMNS defaults during the run")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -152,7 +160,7 @@ async def main() -> int:
     results = []
     for model in models:
         print(f"\n== {model}")
-        tasks = [run_case(c, sids[c["db_id"]], model, sem, args.candidates) for c in cases]
+        tasks = [run_case(c, sids[c["db_id"]], model, sem, args.candidates, args.style) for c in cases]
         for n, coro in enumerate(asyncio.as_completed(tasks), 1):
             r = await coro
             results.append(r)

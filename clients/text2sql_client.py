@@ -71,13 +71,14 @@ class Text2SQL:
                              params={"refresh": "true" if refresh else None})
 
     def ask(self, source_id: str, question: str, model: str | None = None, context: list[dict] | None = None,
-            candidates: int | None = None, no_cache: bool = False) -> dict:
+            candidates: int | None = None, no_cache: bool = False, style: str = "friendly") -> dict:
         """Question -> {status, sql, explanation, result: {columns, rows, row_count, truncated}, id, cost, ...}.
 
         context: earlier turns [{"question": ..., "sql": ...}] for follow-up questions.
+        style: "friendly" (readable extra columns, rounding) or "exact" (only the requested columns).
         """
         body = {"source_id": source_id, "question": question, "model": model, "context": context or [],
-                "no_cache": no_cache}
+                "no_cache": no_cache, "style": style}
         if candidates:
             body["candidates"] = candidates
         return self._request("POST", "/api/ask", body)

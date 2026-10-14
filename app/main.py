@@ -328,6 +328,9 @@ class AskRequest(BaseModel):
     context: list[Turn] = Field(default_factory=list, max_length=10)
     no_cache: bool = Field(False, description="always generate new SQL instead of reusing an earlier answer")
     candidates: int | None = Field(None, ge=1, le=5, description="self-consistency: candidate queries to vote on")
+    style: Literal["friendly", "exact"] = Field(
+        "friendly", description="friendly: readable columns, rounding, default LIMIT (UI); "
+                                "exact: only the requested columns, no rounding or extra LIMIT (programs)")
 
 
 def _record(req: AskRequest, model: str, out: dict) -> int:
@@ -347,7 +350,7 @@ async def ask(req: AskRequest, request: Request):
     _audit(request, "ask")
     model = _model(req.model)
     out = await pipeline.ask(req.source_id, req.question.strip(), model, [t.model_dump() for t in req.context],
-                             use_cache=not req.no_cache, candidates=req.candidates)
+                             use_cache=not req.no_cache, candidates=req.candidates, style=req.style)
     out["id"] = _record(req, model, out)
     return out
 
@@ -365,7 +368,8 @@ async def ask_stream(req: AskRequest, request: Request):
         audit.set_context(request_id, client_ip, "ask")  # the body runs in the response's own context
         try:
             async for event in pipeline.ask_events(req.source_id, req.question.strip(), model, context,
-                                                   use_cache=not req.no_cache, candidates=req.candidates):
+                                                   use_cache=not req.no_cache, candidates=req.candidates,
+                                                   style=req.style):
                 if event["type"] == "result":
                     event["id"] = _record(req, model, event)
                 yield f"data: {json.dumps(event, default=str)}\n\n"

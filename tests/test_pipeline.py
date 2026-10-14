@@ -272,3 +272,12 @@ def test_self_consistency_ignores_extra_columns(fake_llm):
     out = run(pipeline.ask("shop", "first customers", "m", [], use_cache=False, candidates=3))
     assert out["votes"] == {"candidates": 3, "agreeing": 2, "distinct_results": 2}
     assert "customer_id" in out["sql"]
+
+
+def test_exact_style_prompt(fake_llm):
+    fake = fake_llm(sql_reply("SELECT 1"), sql_reply("SELECT 1"))
+    run(pipeline.ask("shop", "q1", "m", [], style="exact"))
+    run(pipeline.ask("shop", "q2", "m", []))
+    exact, friendly = fake.calls[0][0]["content"], fake.calls[1][0]["content"]
+    assert "Return exactly the columns" in exact and "LIMIT 100" not in exact
+    assert "LIMIT 100" in friendly and "Return exactly the columns" not in friendly

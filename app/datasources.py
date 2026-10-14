@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, connectors, history
+from . import config, connectors, crypto, history
 
 SAMPLE_ID = "shop"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -54,7 +54,10 @@ def unique_id(base: str) -> str:
 def _conn_info(source_id: str) -> connectors.ConnInfo | None:
     if not _ID_RE.match(source_id or ""):
         return None
-    row = history.get_connection(source_id)
+    try:
+        row = history.get_connection(source_id)
+    except crypto.DecryptError as e:
+        raise QueryError(str(e))
     if not row:
         return None
     return connectors.ConnInfo(dialect=row["dialect"], host=row["host"], port=row["port"], database=row["database"],
@@ -66,12 +69,15 @@ def exists(source_id: str) -> bool:
         source_path(source_id)
         return True
     except KeyError:
-        return _conn_info(source_id) is not None
+        return _connection_dialect(source_id) is not None
+
+
+def _connection_dialect(source_id: str) -> str | None:
+    return history.connection_dialect(source_id) if _ID_RE.match(source_id or "") else None
 
 
 def dialect(source_id: str) -> str:
-    info = _conn_info(source_id)
-    return info.dialect if info else "sqlite"
+    return _connection_dialect(source_id) or "sqlite"
 
 
 def _authorizer(action, arg1, arg2, dbname, source):
@@ -108,11 +114,12 @@ def list_sources() -> list[dict]:
         })
     for row in history.list_connections():
         cached = _schema_cache.get(row["id"])
-        info = _conn_info(row["id"])
+        info = connectors.ConnInfo(dialect=row["dialect"], host=row["host"], port=row["port"],
+                                   database=row["database"], user=row["user"], db_schema=row["db_schema"])
         out.append({
             "id": row["id"], "name": row["name"], "kind": row["dialect"],
             "tables": len(cached[1]["tables"]) if cached else None,
-            "detail": info.label if info else "", "builtin": False,
+            "detail": info.label, "builtin": False,
         })
     out.sort(key=lambda s: (not s["builtin"], s.get("kind", "sqlite") != "sqlite", s["name"].lower()))
     return out
@@ -420,7 +427,7 @@ def add_connection(name: str, info: connectors.ConnInfo) -> str:
 def delete_source(source_id: str) -> None:
     if source_id == SAMPLE_ID:
         raise PermissionError("The sample database cannot be deleted.")
-    if _conn_info(source_id):
+    if _connection_dialect(source_id):
         history.delete_connection(source_id)
         with _cache_lock:
             _schema_cache.pop(source_id, None)

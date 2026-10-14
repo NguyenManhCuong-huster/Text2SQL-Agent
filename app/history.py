@@ -4,7 +4,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
-from . import config
+from . import config, crypto
 
 DDL = """
 CREATE TABLE IF NOT EXISTS history (
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS connections (
     port          INTEGER NOT NULL,
     database      TEXT NOT NULL,
     user          TEXT NOT NULL,
-    password      TEXT NOT NULL,     -- stored locally in DATA_DIR/app.db; use a read-only DB user
+    password      TEXT NOT NULL,     -- Fernet-encrypted ("enc1:..."), see crypto.py; use a read-only DB user
     db_schema     TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -70,6 +70,10 @@ def init() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(history)")}
         if "cost" not in cols:  # migrate databases created by v1.0
             conn.execute("ALTER TABLE history ADD COLUMN cost REAL")
+        for row in conn.execute("SELECT id, password FROM connections").fetchall():
+            if not crypto.is_encrypted(row["password"]):  # encrypt passwords stored in plaintext by v1.1
+                conn.execute("UPDATE connections SET password = ? WHERE id = ?",
+                             (crypto.encrypt(row["password"]), row["id"]))
         conn.commit()
     finally:
         conn.close()
@@ -143,19 +147,35 @@ _CONN_FIELDS = ("dialect", "host", "port", "database", "user", "password", "db_s
 
 def add_connection(conn_id: str, name: str, **fields) -> None:
     with _conn() as c:
+        values = {**fields, "password": crypto.encrypt(fields["password"])}
         c.execute("INSERT INTO connections (id, name, dialect, host, port, database, user, password, db_schema) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (conn_id, name, *[fields[f] for f in _CONN_FIELDS]))
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (conn_id, name, *[values[f] for f in _CONN_FIELDS]))
 
 
 def get_connection(conn_id: str) -> dict | None:
+    """Connection row with the password decrypted (raises crypto.DecryptError if the key changed)."""
     with _conn() as c:
         row = c.execute("SELECT * FROM connections WHERE id = ?", (conn_id,)).fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    out["password"] = crypto.decrypt(out["password"])
+    return out
+
+
+def connection_dialect(conn_id: str) -> str | None:
+    with _conn() as c:
+        row = c.execute("SELECT dialect FROM connections WHERE id = ?", (conn_id,)).fetchone()
+    return row["dialect"] if row else None
 
 
 def list_connections() -> list[dict]:
+    """Connection rows without passwords."""
     with _conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM connections ORDER BY name")]
+        rows = [dict(r) for r in c.execute("SELECT * FROM connections ORDER BY name")]
+    for r in rows:
+        r.pop("password", None)
+    return rows
 
 
 def delete_connection(conn_id: str) -> None:

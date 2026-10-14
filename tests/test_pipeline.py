@@ -236,3 +236,29 @@ def test_repeated_question_reuses_sql(fake_llm, monkeypatch):
         assert run(pipeline.ask("shop", "how many products exist", "m", []))["cached"] is None
     finally:
         history.delete(item_id=hid)
+
+
+def test_self_consistency_majority_wins(fake_llm):
+    # candidate 1 (deterministic) disagrees; candidates 2 and 3 are written differently but give the same result
+    fake = fake_llm(sql_reply("SELECT COUNT(*) FROM orders"),
+                    sql_reply("SELECT COUNT(*) FROM orders WHERE status = 'delivered'", "Delivered only."),
+                    sql_reply("SELECT COUNT(order_id) AS n FROM orders WHERE status IN ('delivered')"),
+                    )
+    out = run(pipeline.ask("shop", "delivered orders count", "m", [], use_cache=False, candidates=3))
+    assert out["status"] == "ok" and len(fake.calls) == 3
+    assert out["votes"] == {"candidates": 3, "agreeing": 2, "distinct_results": 2}
+    assert "delivered" in out["sql"] and out["result"]["rows"][0][0] < 6000
+
+
+def test_self_consistency_tie_prefers_deterministic(fake_llm):
+    fake_llm(sql_reply("SELECT 1 AS a"), sql_reply("SELECT 2 AS a"))
+    out = run(pipeline.ask("shop", "q", "m", [], use_cache=False, candidates=2))
+    assert out["result"]["rows"] == [[1]] and out["votes"]["agreeing"] == 1
+
+
+def test_self_consistency_all_fail_falls_back_to_repair(fake_llm):
+    fake = fake_llm(sql_reply("SELECT nope FROM orders"), sql_reply("SELECT bad FROM orders"),
+                    sql_reply("SELECT 7 AS fixed"))
+    out = run(pipeline.ask("shop", "q", "m", [], use_cache=False, candidates=2))
+    assert out["status"] == "ok" and out["result"]["rows"] == [[7]]
+    assert out["votes"]["agreeing"] == 0 and "no such column" in fake.calls[2][-1]["content"]

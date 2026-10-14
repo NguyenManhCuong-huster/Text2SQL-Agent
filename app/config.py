@@ -49,6 +49,9 @@ FEW_SHOT_K = int(os.getenv("FEW_SHOT_K", "3"))
 # Repeated questions reuse the stored SQL (re-executed for fresh data) instead of calling the LLM again.
 # Answers confirmed correct are reused regardless of age; others for CACHE_TTL_S seconds. 0 = off.
 CACHE_TTL_S = int(os.getenv("CACHE_TTL_S", "86400"))
+# Self-consistency: generate this many candidate queries, run them all and keep the result most of them agree on.
+# Costs N times more tokens on the first attempt; 1 = off. Requests may override it (1-5).
+CANDIDATES = max(1, min(5, int(os.getenv("CANDIDATES", "1"))))
 
 SOURCES_DIR.mkdir(parents=True, exist_ok=True)
 

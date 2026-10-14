@@ -192,7 +192,52 @@ def cached_answer(source_id: str, question: str, model: str) -> dict | None:
     return (confirmed or same_model or [None])[0]
 
 
-async def ask_events(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True):
+def _signature(result: dict) -> str:
+    """Order- and column-name-insensitive fingerprint of a result, so equivalent queries vote together."""
+    def norm(v):
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, (int, float)):
+            return round(float(v), 2)
+        if isinstance(v, str):
+            try:
+                return round(float(v), 2)
+            except ValueError:
+                return v.strip()
+        return v
+    rows = sorted((tuple(norm(v) for v in r) for r in result["rows"]), key=repr)
+    return json.dumps([result["truncated"], rows], default=str)
+
+
+async def _vote(source_id: str, messages: list[dict], model: str, n: int, usage: _Usage):
+    """Generate n candidates (the first deterministic), run them, return (reply, result, votes) of the majority."""
+    replies = await asyncio.gather(*(llm.chat(messages, model, temperature=0.0 if i == 0 else 0.7)
+                                     for i in range(n)), return_exceptions=True)
+    ok = [usage.add(r) for r in replies if not isinstance(r, BaseException)]
+    if not ok:
+        raise replies[0]
+    parsed = [(i, r, parse_response(r["content"])[0]) for i, r in enumerate(ok)]
+    runnable = [(i, r, q) for i, r, q in parsed if q]
+
+    async def run_one(q):
+        try:
+            return await asyncio.to_thread(datasources.execute, source_id, q)
+        except datasources.QueryError:
+            return None
+    results = await asyncio.gather(*(run_one(q) for _, _, q in runnable))
+    groups: dict[str, list] = {}
+    for (i, r, _), res in zip(runnable, results):
+        if res is not None:
+            groups.setdefault(_signature(res), []).append((i, r, res))
+    if not groups:  # nothing ran: continue with the deterministic candidate (error feedback loop)
+        return ok[0], None, {"candidates": len(ok), "agreeing": 0, "distinct_results": 0}
+    best = max(groups.values(), key=lambda g: (len(g), -g[0][0]))  # ties: the deterministic candidate wins
+    _, reply, res = best[0]
+    return reply, res, {"candidates": len(ok), "agreeing": len(best), "distinct_results": len(groups)}
+
+
+async def ask_events(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True,
+                     candidates: int | None = None):
     """Async generator of progress events; the last one has type 'result' with the full outcome."""
     started = time.perf_counter()
     usage = _Usage()
@@ -201,12 +246,14 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
     result = sql = None
     explanation, error = "", None
     examples: list[dict] = []
+    votes = None
+    n_candidates = max(1, min(5, candidates or config.CANDIDATES))
 
     def finish(status: str, **kw) -> dict:
         out = {"type": "result", "status": status, "sql": sql, "explanation": explanation, "result": None,
                "error": None, "attempts": attempts, "model": model, "tokens": usage.tokens,
                "cost": round(usage.cost, 6), "tables_used": tables, "examples_used": len(examples),
-               "cached": None}
+               "cached": None, "votes": votes}
         out.update(kw)
         out["duration_ms"] = round((time.perf_counter() - started) * 1000)
         return out
@@ -238,8 +285,15 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
     messages = build_messages(source_id, question, context, tables, examples)
     retried_empty = False
     for attempt in range(config.MAX_RETRIES + 1):
-        yield {"type": "step", "message": "Writing SQL…" if attempt == 0 else f"Fixing the query (attempt {attempt + 1})…"}
-        reply = usage.add(await llm.chat(messages, model))
+        precomputed = None
+        if attempt == 0 and n_candidates > 1:
+            yield {"type": "step", "message": f"Writing {n_candidates} candidate queries and comparing their results…"}
+            reply, precomputed, votes = await _vote(source_id, messages, model, n_candidates, usage)
+            if votes["agreeing"]:
+                yield {"type": "step", "message": f"{votes['agreeing']} of {votes['candidates']} candidates agree"}
+        else:
+            yield {"type": "step", "message": "Writing SQL…" if attempt == 0 else f"Fixing the query (attempt {attempt + 1})…"}
+            reply = usage.add(await llm.chat(messages, model))
         sql, expl, cannot = parse_response(reply["content"])
         if expl:
             explanation = expl
@@ -251,7 +305,7 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
         yield {"type": "sql", "sql": sql, "attempt": attempt + 1}
         yield {"type": "step", "message": "Running query…"}
         try:
-            result = await asyncio.to_thread(datasources.execute, source_id, sql)
+            result = precomputed or await asyncio.to_thread(datasources.execute, source_id, sql)
             error = None
         except datasources.QueryError as e:
             error = str(e)
@@ -285,9 +339,10 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
         yield finish("ok", result=result)
 
 
-async def ask(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True) -> dict:
+async def ask(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True,
+              candidates: int | None = None) -> dict:
     final = None
-    async for event in ask_events(source_id, question, model, context, use_cache):
+    async for event in ask_events(source_id, question, model, context, use_cache, candidates):
         final = event
     final.pop("type", None)
     return final

@@ -321,6 +321,7 @@ async function ask(question, { noCache = false } = {}) {
   try {
     const res = await askStream({
       source_id: state.sourceId, question, model: currentModel(), context: state.context.slice(-4), no_cache: noCache,
+      ...($("#opt-vote").checked ? { candidates: 3 } : {}),
     }, onEvent);
     renderResult(turn, question, res);
     if (res.status === "ok" && res.sql) {
@@ -367,6 +368,18 @@ function renderResult(turn, question, res) {
     p.style.margin = "0";
     p.innerHTML = `${res.cached.verified ? "Reused a verified answer" : "Reused the SQL of an earlier answer"} to this question (fresh data, no LLM cost). <button class="link-btn small" type="button">Regenerate</button>`;
     $("button", p).onclick = () => ask(question, { noCache: true });
+    body.appendChild(p);
+  }
+  if (res.votes) {
+    const p = document.createElement("p");
+    p.className = "muted small";
+    p.style.margin = "0";
+    const v = res.votes;
+    p.textContent = v.agreeing
+      ? `Cross-check: ${v.agreeing} of ${v.candidates} candidate queries returned this result` +
+        (v.distinct_results > 1 ? ` (${v.distinct_results} different results – double-check the assumptions)` : "")
+      : `Cross-check: none of the ${v.candidates} candidates ran; the query was repaired instead`;
+    if (v.agreeing && v.agreeing < v.candidates) p.style.color = "var(--warn)";
     body.appendChild(p);
   }
   if (res.examples_used) {
@@ -928,6 +941,8 @@ async function init() {
 
   $("#opt-summary").checked = store.get("summary", true);
   $("#opt-summary").onchange = e => store.set("summary", e.target.checked);
+  $("#opt-vote").checked = store.get("vote", false);
+  $("#opt-vote").onchange = e => store.set("vote", e.target.checked);
 
   const ta = $("#question");
   ta.addEventListener("input", () => autosize(ta));

@@ -96,12 +96,13 @@ def register_db(url: str) -> str:
     return sid
 
 
-async def run_case(case: dict, model: str, sem: asyncio.Semaphore, source: str = "shop") -> dict:
+async def run_case(case: dict, model: str, sem: asyncio.Semaphore, source: str = "shop",
+                   candidates: int = 1) -> dict:
     gold = datasources.execute("shop", case["sql"], max_rows=10000)
     async with sem:
         t = time.perf_counter()
         try:
-            out = await pipeline.ask(source, case["question"], model, [], use_cache=False)
+            out = await pipeline.ask(source, case["question"], model, [], use_cache=False, candidates=candidates)
         except Exception as e:  # network / provider errors count as failures
             out = {"status": "error", "error": str(e), "sql": None, "result": None, "attempts": [], "cost": 0, "tokens": 0}
         latency = time.perf_counter() - t
@@ -144,6 +145,7 @@ async def main() -> int:
     ap.add_argument("--only", default="", help="comma-separated case ids")
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--db-url", default="", help="run against an external copy (postgresql://... or mysql://...)")
+    ap.add_argument("--candidates", type=int, default=1, help="self-consistency voting (1-5 candidates)")
     ap.add_argument("-v", "--verbose", action="store_true", help="print SQL of failed cases")
     args = ap.parse_args()
 
@@ -161,7 +163,7 @@ async def main() -> int:
     results = []
     for model in models:
         print(f"\n== {model} ({len(cases)} cases)")
-        for coro in asyncio.as_completed([run_case(c, model, sem, source) for c in cases]):
+        for coro in asyncio.as_completed([run_case(c, model, sem, source, args.candidates) for c in cases]):
             r = await coro
             results.append(r)
             mark = "PASS" if r["correct"] else "FAIL"

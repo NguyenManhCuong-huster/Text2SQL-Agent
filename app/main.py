@@ -416,13 +416,21 @@ def get_history(source_id: str | None = None, starred: bool = False, limit: int 
     return history.list_(source_id, max(1, min(limit, 500)), starred)
 
 
-class StarRequest(BaseModel):
-    starred: bool
+class HistoryPatch(BaseModel):
+    starred: bool | None = None
+    feedback: Literal[1, -1, 0] | None = Field(None, description="1 = correct, -1 = wrong, 0 = clear")
+    sql: str | None = Field(None, max_length=20000, description="corrected SQL (with feedback=1)")
 
 
 @app.patch("/api/history/{item_id}")
-def star_history(item_id: int, req: StarRequest):
-    history.set_starred(item_id, req.starred)
+def patch_history(item_id: int, req: HistoryPatch):
+    """Star an entry and/or record whether its answer was correct (correct answers become examples)."""
+    if req.starred is not None:
+        history.set_starred(item_id, req.starred)
+    if req.feedback is not None:
+        sql = req.sql.strip() if req.sql and req.feedback == 1 else None
+        if not history.set_feedback(item_id, req.feedback or None, sql):
+            raise HTTPException(404, "History entry not found.")
     return {"ok": True}
 
 

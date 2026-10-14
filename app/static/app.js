@@ -29,6 +29,8 @@ const ICON = {
   star: '<svg viewBox="0 0 24 24"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/></svg>',
   starFill: '<svg viewBox="0 0 24 24" style="fill:currentColor"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  up: '<svg viewBox="0 0 24 24"><path d="M7 11v9H4v-9zM7 11l4-8c1.5 0 2.5 1 2.5 2.5V9h5.2a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 17.5 20H7"/></svg>',
+  down: '<svg viewBox="0 0 24 24"><path d="M7 13V4H4v9zM7 13l4 8c1.5 0 2.5-1 2.5-2.5V15h5.2a2 2 0 0 0 2-2.3l-1.2-7A2 2 0 0 0 17.5 4H7"/></svg>',
   retry: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>',
 };
 
@@ -365,6 +367,7 @@ function renderResult(turn, question, res) {
   const resultSlot = document.createElement("div");
   resultSlot.style.cssText = "display:flex;flex-direction:column;gap:12px";
 
+  let currentSql = res.sql || "", edited = false;
   body.appendChild(sqlBlock(res.sql || "", async (sql) => {
     resultSlot.innerHTML = '<div class="thinking"><span class="dots"><span></span><span></span><span></span></span> Running…</div>';
     answerSlot.innerHTML = "";
@@ -372,8 +375,12 @@ function renderResult(turn, question, res) {
       const r = await api("/api/execute", { json: { source_id: state.sourceId, sql } });
       resultSlot.innerHTML = "";
       renderData(resultSlot, r, { question, totalMs: null, model: null });
+      currentSql = sql;
+      edited = true;
       const ctx = state.context.find(c => c.question === question);
       if (ctx) ctx.sql = sql;
+      $$(".feedback", body).forEach(el => el.remove());
+      if (res.id) body.appendChild(feedbackBar(res.id, () => currentSql, () => edited));
     } catch (e) {
       resultSlot.innerHTML = `<div class="status-box error"><b>Query error</b><pre>${esc(e.message)}</pre></div>`;
     }
@@ -395,6 +402,7 @@ function renderResult(turn, question, res) {
     return;
   }
   renderData(resultSlot, res.result, { question, totalMs: res.duration_ms, model: res.model, tokens: res.tokens, cost: res.cost });
+  if (res.id) body.appendChild(feedbackBar(res.id, () => currentSql, () => edited));
 
   if ($("#opt-summary").checked) {
     answerSlot.innerHTML = '<div class="answer">' + ICON.spark + '<p class="skeleton" style="height:18px;width:60%"></p></div>';
@@ -406,6 +414,28 @@ function renderResult(turn, question, res) {
       $("p", answerSlot).textContent = a.answer;
     }).catch(() => { answerSlot.innerHTML = ""; });
   }
+}
+
+// "Correct" answers are reused as examples for similar questions; an edited query is saved as the correct one.
+function feedbackBar(historyId, getSql, wasEdited) {
+  const host = document.createElement("div");
+  host.className = "feedback";
+  host.innerHTML = `<span class="muted small">Is this answer correct?</span>
+    <button class="tool-btn" data-fb="1" title="Correct: reuse as an example for similar questions">${ICON.up} Correct</button>
+    <button class="tool-btn" data-fb="-1" title="Wrong">${ICON.down} Wrong</button>`;
+  $$("[data-fb]", host).forEach(b => b.onclick = async () => {
+    const fb = +b.dataset.fb;
+    const active = b.classList.contains("active");
+    try {
+      await api(`/api/history/${historyId}`, {
+        method: "PATCH",
+        json: { feedback: active ? 0 : fb, ...(fb === 1 && !active && wasEdited() ? { sql: getSql() } : {}) },
+      });
+      $$("[data-fb]", host).forEach(x => x.classList.toggle("active", !active && x === b));
+      if (!active) toast(fb === 1 ? (wasEdited() ? "Saved your corrected SQL as an example" : "Thanks! Saved as an example") : "Thanks for the feedback");
+    } catch (e) { toast(e.message, true); }
+  });
+  return host;
 }
 
 function sqlBlock(sql, onRun) {

@@ -177,6 +177,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: v
 .tool-btn:hover { background: var(--surface); color: var(--text); }
 .tool-btn.primary { color: var(--accent); font-weight: 600; }
 .tool-btn svg { width: 14px; height: 14px; }
+.feedback { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.feedback .tool-btn.active[data-fb="1"] { color: var(--ok, #059669); font-weight: 600; }
+.feedback .tool-btn.active[data-fb="-1"] { color: var(--danger); font-weight: 600; }
 .sql-code { margin: 0; padding: 12px 14px; font: 13px/1.6 var(--mono); overflow-x: auto; background: var(--surface) !important; max-height: 360px; }
 .sql-code code { background: transparent !important; padding: 0 !important; }
 .sql-edit {

@@ -166,3 +166,17 @@ def test_daily_budget(client, monkeypatch, fake_llm):
     finally:
         with history._conn() as c:
             c.execute("DELETE FROM llm_usage WHERE cost = 0.6")
+
+
+def test_feedback(client, fake_llm):
+    fake_llm(sql_reply("SELECT COUNT(*) AS n FROM orders"))
+    out = client.post("/api/ask", json={"source_id": "shop", "question": "orders count?"}).json()
+    fixed = "SELECT COUNT(*) AS n FROM orders WHERE status <> 'cancelled'"
+    assert client.patch(f"/api/history/{out['id']}", json={"feedback": 1, "sql": fixed}).status_code == 200
+    item = next(h for h in client.get("/api/history").json() if h["id"] == out["id"])
+    assert item["feedback"] == 1 and item["sql"] == fixed
+    client.patch(f"/api/history/{out['id']}", json={"feedback": 0})
+    item = next(h for h in client.get("/api/history").json() if h["id"] == out["id"])
+    assert item["feedback"] is None
+    assert client.patch("/api/history/999999", json={"feedback": -1}).status_code == 404
+    assert client.patch(f"/api/history/{out['id']}", json={"feedback": 5}).status_code == 422

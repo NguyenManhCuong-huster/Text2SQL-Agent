@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS history (
     tokens        INTEGER,
     cost          REAL,              -- USD reported by OpenRouter
     starred       INTEGER NOT NULL DEFAULT 0,
+    feedback      INTEGER,           -- 1 = confirmed correct (reused as an example), -1 = wrong, NULL = none
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_history_source ON history(source_id, id DESC);
@@ -97,6 +98,8 @@ def init() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(history)")}
         if "cost" not in cols:  # migrate databases created by v1.0
             conn.execute("ALTER TABLE history ADD COLUMN cost REAL")
+        if "feedback" not in cols:  # v1.2
+            conn.execute("ALTER TABLE history ADD COLUMN feedback INTEGER")
         for row in conn.execute("SELECT id, password FROM connections").fetchall():
             if not crypto.is_encrypted(row["password"]):  # encrypt passwords stored in plaintext by v1.1
                 conn.execute("UPDATE connections SET password = ? WHERE id = ?",
@@ -142,6 +145,17 @@ def list_(source_id: str | None, limit: int = 100, starred: bool = False) -> lis
 def set_starred(item_id: int, starred: bool) -> None:
     with _conn() as c:
         c.execute("UPDATE history SET starred = ? WHERE id = ?", (int(starred), item_id))
+
+
+def set_feedback(item_id: int, feedback: int | None, sql: str | None = None) -> bool:
+    """Record a verdict on an answer; `sql` replaces the stored query when the user corrected it."""
+    with _conn() as c:
+        if sql:
+            cur = c.execute("UPDATE history SET feedback = ?, sql = ?, status = 'ok', error = NULL WHERE id = ?",
+                            (feedback, sql, item_id))
+        else:
+            cur = c.execute("UPDATE history SET feedback = ? WHERE id = ?", (feedback, item_id))
+        return cur.rowcount > 0
 
 
 def delete(item_id: int | None = None, source_id: str | None = None) -> None:

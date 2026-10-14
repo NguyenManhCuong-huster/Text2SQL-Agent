@@ -1,6 +1,9 @@
 """Text2SQL Studio - FastAPI monolith serving both the JSON API and the web UI."""
 import json
 import logging
+import re
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,7 +19,9 @@ from . import auth, config, connectors, datasources, history, llm, pipeline, sam
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
 log = logging.getLogger("text2sql")
 STATIC_DIR = Path(__file__).parent / "static"
-PUBLIC_API = {"/api/health", "/api/auth", "/api/login", "/api/logout"}
+PUBLIC_API = {"/api/health", "/api/ready", "/api/auth", "/api/login", "/api/logout"}
+access_log = logging.getLogger("text2sql.access")
+_REQ_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 @asynccontextmanager
@@ -37,13 +42,24 @@ app = FastAPI(title="Text2SQL Studio", version="1.1.0", lifespan=lifespan)
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
+    # Correlates client reports with server logs; a caller-supplied id is kept if it is well-formed.
+    incoming = request.headers.get("x-request-id", "")
+    request_id = incoming if _REQ_ID_RE.match(incoming) else uuid.uuid4().hex[:16]
+    request.state.request_id = request_id
+    started = time.perf_counter()
     if path.startswith("/api/") and path not in PUBLIC_API:
         if auth.enabled() and not auth.valid_token(request.cookies.get(auth.COOKIE)):
-            return JSONResponse(status_code=401, content={"detail": "Login required."})
+            response = JSONResponse(status_code=401, content={"detail": "Login required."})
+            response.headers["X-Request-ID"] = request_id
+            return response
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers["X-Request-ID"] = request_id
+    if path.startswith("/api/") and path not in ("/api/health", "/api/ready"):
+        access_log.info("%s %s %s %d %.0fms", request_id, _client_ip(request), f"{request.method} {path}",
+                        response.status_code, (time.perf_counter() - started) * 1000)
     return response
 
 
@@ -82,6 +98,25 @@ def _check_source(source_id: str) -> None:
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/ready")
+def ready():
+    """Readiness: the app store is writable, the sample database opens and an LLM key is configured."""
+    checks = {}
+    try:
+        history.ping()
+        checks["app_db"] = "ok"
+    except Exception as e:  # noqa: BLE001 - report any storage failure
+        checks["app_db"] = f"error: {e}"
+    try:
+        datasources.execute(datasources.SAMPLE_ID, "SELECT 1")
+        checks["sample_db"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        checks["sample_db"] = f"error: {e}"
+    checks["llm_key"] = "ok" if config.OPENROUTER_KEY else "missing"
+    ok = all(v == "ok" for v in checks.values())
+    return JSONResponse(status_code=200 if ok else 503, content={"status": "ok" if ok else "degraded", "checks": checks})
 
 
 @app.get("/api/auth")

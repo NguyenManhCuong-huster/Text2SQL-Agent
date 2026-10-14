@@ -113,3 +113,12 @@ def test_rate_limit(client, monkeypatch, fake_llm):
     assert client.post("/api/ask", json=body).status_code == 200
     r = client.post("/api/ask", json=body)
     assert r.status_code == 429 and "Retry-After" in r.headers
+
+
+def test_request_id_and_ready(client):
+    r = client.get("/api/sources", headers={"X-Request-ID": "abc-123"})
+    assert r.headers["x-request-id"] == "abc-123"
+    r = client.get("/api/sources", headers={"X-Request-ID": "bad id!"})
+    assert len(r.headers["x-request-id"]) == 16
+    ready = client.get("/api/ready").json()
+    assert ready["status"] == "ok" and ready["checks"]["sample_db"] == "ok"

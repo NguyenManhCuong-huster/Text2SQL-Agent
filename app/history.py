@@ -80,6 +80,13 @@ def init() -> None:
     _ready = True
 
 
+def ping() -> None:
+    """Raises if the app database cannot be written."""
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS _ping (x INTEGER)")
+        c.execute("DELETE FROM _ping")
+
+
 def add(**fields) -> int:
     cols = ", ".join(fields)
     marks = ", ".join("?" for _ in fields)

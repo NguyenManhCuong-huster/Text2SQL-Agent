@@ -6,8 +6,18 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY", "")
+# Any OpenAI-compatible chat-completions endpoint works: OpenRouter (default), OpenAI, or a local server such as
+# Ollama (http://localhost:11434/v1/chat/completions), vLLM or LM Studio. Local servers need no key.
+OPENROUTER_URL = (os.getenv("LLM_URL") or os.getenv("OPENROUTER_URL")
+                  or "https://openrouter.ai/api/v1/chat/completions")
+IS_OPENROUTER = "openrouter.ai" in OPENROUTER_URL
+
+
+def llm_ready() -> bool:
+    """A key is mandatory for hosted providers; local OpenAI-compatible servers usually run without one."""
+    return bool(OPENROUTER_KEY) or not IS_OPENROUTER
+
 DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-5.5")
 AVAILABLE_MODELS = [
     m.strip()

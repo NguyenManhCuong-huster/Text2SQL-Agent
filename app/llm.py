@@ -1,4 +1,4 @@
-"""Minimal async OpenRouter chat client."""
+"""Minimal async client for OpenRouter or any OpenAI-compatible chat-completions endpoint."""
 import httpx
 
 from . import config
@@ -26,37 +26,36 @@ async def close() -> None:
 async def chat(messages: list[dict], model: str, temperature: float = 0.0, max_tokens: int = 4000,
                reasoning_effort: str | None = None) -> dict:
     """reasoning_effort ('low'|'medium'|'high') caps hidden thinking on reasoning models; others ignore it."""
-    if not config.OPENROUTER_KEY:
+    if not config.llm_ready():
         raise LLMError("OPENROUTER_KEY is not configured.")
     body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-    if reasoning_effort:
-        body["reasoning"] = {"effort": reasoning_effort, "exclude": True}
+    headers = {}
+    if config.OPENROUTER_KEY:
+        headers["Authorization"] = f"Bearer {config.OPENROUTER_KEY}"
+    if config.IS_OPENROUTER:  # OpenRouter-only extensions; other servers may reject unknown fields
+        headers.update({"HTTP-Referer": "http://localhost:8000", "X-Title": "Text2SQL Studio"})
+        if reasoning_effort:
+            body["reasoning"] = {"effort": reasoning_effort, "exclude": True}
     try:
-        resp = await client().post(
-            config.OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {config.OPENROUTER_KEY}",
-                "HTTP-Referer": "http://localhost:8000",
-                "X-Title": "Text2SQL Studio",
-            },
-            json=body,
-        )
+        resp = await client().post(config.OPENROUTER_URL, headers=headers, json=body)
     except httpx.HTTPError as e:
-        raise LLMError(f"Network error contacting OpenRouter: {e}") from e
+        raise LLMError(f"Network error contacting the LLM endpoint: {e}") from e
     if resp.status_code != 200:
         try:
-            detail = resp.json().get("error", {}).get("message", resp.text)
-        except ValueError:
+            err = resp.json().get("error", {})
+            detail = err.get("message", resp.text) if isinstance(err, dict) else str(err)
+        except (ValueError, AttributeError):
             detail = resp.text
-        raise LLMError(f"OpenRouter error {resp.status_code}: {detail[:300]}")
+        raise LLMError(f"LLM error {resp.status_code}: {str(detail)[:300]}")
     data = resp.json()
     if "error" in data:
-        raise LLMError(f"OpenRouter error: {data['error'].get('message', data['error'])}")
+        err = data["error"]
+        raise LLMError(f"LLM error: {err.get('message', err) if isinstance(err, dict) else err}")
     try:
         choice = data["choices"][0]
         content = choice["message"]["content"] or ""
     except (KeyError, IndexError) as e:
-        raise LLMError("Malformed response from OpenRouter.") from e
+        raise LLMError("Malformed response from the LLM endpoint.") from e
     if not content.strip():
         reason = choice.get("finish_reason")
         raise LLMError("The model returned an empty response"

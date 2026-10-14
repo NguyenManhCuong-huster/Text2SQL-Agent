@@ -28,7 +28,7 @@ _REQ_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 async def lifespan(_: FastAPI):
     history.init()
     sample_data.ensure_sample()
-    if not config.OPENROUTER_KEY:
+    if not config.llm_ready():
         log.warning("OPENROUTER_KEY is not set - question answering will fail.")
     if not auth.enabled():
         log.warning("Neither APP_PASSWORD nor API_KEYS is set - anyone who can reach this server can use it.")
@@ -114,7 +114,7 @@ def ready():
         checks["sample_db"] = "ok"
     except Exception as e:  # noqa: BLE001
         checks["sample_db"] = f"error: {e}"
-    checks["llm_key"] = "ok" if config.OPENROUTER_KEY else "missing"
+    checks["llm_key"] = "ok" if config.llm_ready() else "missing"
     ok = all(v == "ok" for v in checks.values())
     return JSONResponse(status_code=200 if ok else 503, content={"status": "ok" if ok else "degraded", "checks": checks})
 
@@ -156,7 +156,7 @@ def get_config():
     return {
         "default_model": config.DEFAULT_MODEL,
         "models": config.AVAILABLE_MODELS,
-        "key_configured": bool(config.OPENROUTER_KEY),
+        "key_configured": config.llm_ready(),
         "max_rows": config.MAX_ROWS,
         "query_timeout_s": config.QUERY_TIMEOUT_S,
         "max_upload_mb": config.MAX_UPLOAD_MB,

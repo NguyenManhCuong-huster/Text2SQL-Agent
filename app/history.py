@@ -147,6 +147,14 @@ def set_starred(item_id: int, starred: bool) -> None:
         c.execute("UPDATE history SET starred = ? WHERE id = ?", (int(starred), item_id))
 
 
+def confirmed_examples(source_id: str, limit: int = 1000) -> list[dict]:
+    """Question/SQL pairs marked correct on this source, newest first."""
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT id, question, sql FROM history WHERE source_id = ? AND feedback = 1 AND sql IS NOT NULL "
+            "ORDER BY id DESC LIMIT ?", (source_id, limit))]
+
+
 def set_feedback(item_id: int, feedback: int | None, sql: str | None = None) -> bool:
     """Record a verdict on an answer; `sql` replaces the stored query when the user corrected it."""
     with _conn() as c:

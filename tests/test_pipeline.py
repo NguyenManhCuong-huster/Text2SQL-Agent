@@ -172,3 +172,36 @@ def test_business_notes_in_prompt(fake_llm):
     fake = fake_llm(sql_reply("SELECT 1"))
     run(pipeline.ask("shop", "total revenue", "m", []))
     assert "<notes>" not in fake.calls[0][1]["content"]
+
+
+def test_verified_examples_are_retrieved(fake_llm):
+    from app import examples, history
+    good = history.add(source_id="shop", question="Doanh thu theo thang nam 2024", sql="SELECT 'gold' AS marker",
+                       explanation="", model="m", status="ok", error=None, row_count=1, attempts=1,
+                       duration_ms=1, tokens=1, cost=0)
+    other = history.add(source_id="shop", question="Average product rating", sql="SELECT 'other' AS marker",
+                        explanation="", model="m", status="ok", error=None, row_count=1, attempts=1,
+                        duration_ms=1, tokens=1, cost=0)
+    history.set_feedback(good, 1)
+    history.set_feedback(other, 1)
+    try:
+        # accents folded: "doanh thu theo tháng" matches "Doanh thu theo thang"
+        found = examples.find("shop", "doanh thu theo tháng năm 2025")
+        assert [e["id"] for e in found] == [good]
+        fake = fake_llm(sql_reply("SELECT 1"))
+        out = run(pipeline.ask("shop", "Doanh thu theo tháng năm 2025?", "m", []))
+        assert out["examples_used"] == 1
+        prompt = fake.calls[0][1]["content"]
+        assert "<examples>" in prompt and "'gold'" in prompt and "'other'" not in prompt
+        # unconfirmed or rejected entries are never used
+        history.set_feedback(good, -1)
+        assert examples.find("shop", "doanh thu theo tháng năm 2025") == []
+    finally:
+        history.delete(item_id=good)
+        history.delete(item_id=other)
+
+
+def test_similarity_basics():
+    from app.examples import features, similarity
+    assert similarity(features("Top 5 customers by revenue"), features("top 5 customers by revenue")) == 1.0
+    assert similarity(features("Top 5 customers by revenue"), features("weather in Hanoi")) == 0.0

@@ -4,7 +4,7 @@ import json
 import re
 import time
 
-from . import config, datasources, history, llm
+from . import config, datasources, examples as fewshot, history, llm
 
 DIALECT_RULES = {
     "sqlite": ("SQLite",
@@ -107,7 +107,8 @@ def source_notes(source_id: str) -> str:
     return (history.get_source_settings(source_id).get("notes") or "").strip()
 
 
-def build_messages(source_id: str, question: str, context: list[dict], tables: list[str] | None = None) -> list[dict]:
+def build_messages(source_id: str, question: str, context: list[dict], tables: list[str] | None = None,
+                   examples: list[dict] | None = None) -> list[dict]:
     schema = datasources.schema_prompt(source_id, tables=tables)
     engine, rules = DIALECT_RULES[datasources.dialect(source_id)]
     intro = f"Database schema:\n\n<schema>\n{schema}\n</schema>\n\n"
@@ -115,6 +116,8 @@ def build_messages(source_id: str, question: str, context: list[dict], tables: l
     if notes:
         intro += ("Business definitions and rules from the data owner. Follow them; they override your own "
                   f"assumptions (e.g. how revenue or an active customer is defined):\n<notes>\n{notes}\n</notes>\n\n")
+    if examples:
+        intro += fewshot.prompt_block(examples)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(engine=engine, dialect_rules=rules)},
         {"role": "user", "content": intro + "I will now ask questions about this database."},
@@ -146,7 +149,7 @@ def needs_table_selection(source_id: str) -> bool:
 
 
 async def select_tables(source_id: str, question: str, context: list[dict], model: str,
-                        usage: _Usage) -> list[str] | None:
+                        usage: _Usage, example_sql: str = "") -> list[str] | None:
     """For large schemas, ask the model which tables matter, then add FK neighbours. None = use all."""
     schema = datasources.get_schema(source_id)
     by_name = {t["name"]: t for t in schema["tables"]}
@@ -165,8 +168,9 @@ async def select_tables(source_id: str, question: str, context: list[dict], mode
         picked = []
     if not picked:
         return None
-    # Keep tables used earlier in the conversation so follow-ups still work.
-    picked += [n for n in by_name if re.search(rf"\b{re.escape(n.lower())}\b", prior.lower()) and n not in picked]
+    # Keep tables used earlier in the conversation (so follow-ups still work) and by the verified examples.
+    used = (prior + "\n" + example_sql).lower()
+    picked += [n for n in by_name if re.search(rf"\b{re.escape(n.lower())}\b", used) and n not in picked]
     neighbours = []
     for n in picked:
         neighbours += [f["ref_table"] for f in by_name[n]["foreign_keys"] if f["ref_table"] in by_name]
@@ -185,19 +189,23 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
     def finish(status: str, **kw) -> dict:
         out = {"type": "result", "status": status, "sql": sql, "explanation": explanation, "result": None,
                "error": None, "attempts": attempts, "model": model, "tokens": usage.tokens,
-               "cost": round(usage.cost, 6), "tables_used": tables}
+               "cost": round(usage.cost, 6), "tables_used": tables, "examples_used": len(examples)}
         out.update(kw)
         out["duration_ms"] = round((time.perf_counter() - started) * 1000)
         return out
 
     yield {"type": "step", "message": "Reading schema…"}
+    examples = fewshot.find(source_id, question)
+    if examples:
+        yield {"type": "step", "message": f"Found {len(examples)} verified example{'s' if len(examples) > 1 else ''}…"}
     if needs_table_selection(source_id):
         yield {"type": "step", "message": "Large schema – selecting relevant tables…"}
-        tables = await select_tables(source_id, question, context, model, usage)
+        tables = await select_tables(source_id, question, context, model, usage,
+                                     "\n".join(e["sql"] for e in examples))
         if tables:
             yield {"type": "step", "message": f"Using tables: {', '.join(tables)}"}
 
-    messages = build_messages(source_id, question, context, tables)
+    messages = build_messages(source_id, question, context, tables, examples)
     retried_empty = False
     for attempt in range(config.MAX_RETRIES + 1):
         yield {"type": "step", "message": "Writing SQL…" if attempt == 0 else f"Fixing the query (attempt {attempt + 1})…"}

@@ -44,6 +44,9 @@ LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "90"))
 SCHEMA_SELECT_MIN_TABLES = int(os.getenv("SCHEMA_SELECT_MIN_TABLES", "15"))
 SCHEMA_SELECT_CHARS = int(os.getenv("SCHEMA_SELECT_CHARS", "16000"))
 
+# Number of user-confirmed question/SQL examples (feedback "Correct") added to the prompt; 0 = off.
+FEW_SHOT_K = int(os.getenv("FEW_SHOT_K", "3"))
+
 SOURCES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Security: set APP_PASSWORD to require a login. SECRET_KEY signs session cookies (auto-generated if unset).

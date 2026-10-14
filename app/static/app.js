@@ -361,6 +361,13 @@ function renderResult(turn, question, res) {
     p.textContent = `Schema narrowed to: ${res.tables_used.join(", ")}`;
     body.appendChild(p);
   }
+  if (res.examples_used) {
+    const p = document.createElement("p");
+    p.className = "muted small";
+    p.style.margin = "0";
+    p.textContent = `Guided by ${res.examples_used} verified example${res.examples_used > 1 ? "s" : ""} from earlier questions`;
+    body.appendChild(p);
+  }
   const answerSlot = document.createElement("div");
   body.appendChild(answerSlot);
 

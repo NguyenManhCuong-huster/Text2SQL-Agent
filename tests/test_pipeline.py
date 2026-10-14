@@ -262,3 +262,13 @@ def test_self_consistency_all_fail_falls_back_to_repair(fake_llm):
     out = run(pipeline.ask("shop", "q", "m", [], use_cache=False, candidates=2))
     assert out["status"] == "ok" and out["result"]["rows"] == [[7]]
     assert out["votes"]["agreeing"] == 0 and "no such column" in fake.calls[2][-1]["content"]
+
+
+def test_self_consistency_ignores_extra_columns(fake_llm):
+    # the same answer with an extra id column, a different column order or another alias still agrees
+    fake_llm(sql_reply("SELECT full_name, customer_id FROM customers ORDER BY customer_id LIMIT 3"),
+             sql_reply("SELECT full_name AS name FROM customers ORDER BY customer_id LIMIT 3"),
+             sql_reply("SELECT city FROM customers ORDER BY customer_id LIMIT 3"))
+    out = run(pipeline.ask("shop", "first customers", "m", [], use_cache=False, candidates=3))
+    assert out["votes"] == {"candidates": 3, "agreeing": 2, "distinct_results": 2}
+    assert "customer_id" in out["sql"]

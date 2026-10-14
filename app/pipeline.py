@@ -4,7 +4,7 @@ import json
 import re
 import time
 
-from . import config, datasources, examples as fewshot, history, llm
+from . import compare, config, datasources, examples as fewshot, history, llm
 
 DIALECT_RULES = {
     "sqlite": ("SQLite",
@@ -192,23 +192,6 @@ def cached_answer(source_id: str, question: str, model: str) -> dict | None:
     return (confirmed or same_model or [None])[0]
 
 
-def _signature(result: dict) -> str:
-    """Order- and column-name-insensitive fingerprint of a result, so equivalent queries vote together."""
-    def norm(v):
-        if isinstance(v, bool):
-            return int(v)
-        if isinstance(v, (int, float)):
-            return round(float(v), 2)
-        if isinstance(v, str):
-            try:
-                return round(float(v), 2)
-            except ValueError:
-                return v.strip()
-        return v
-    rows = sorted((tuple(norm(v) for v in r) for r in result["rows"]), key=repr)
-    return json.dumps([result["truncated"], rows], default=str)
-
-
 async def _vote(source_id: str, messages: list[dict], model: str, n: int, usage: _Usage):
     """Generate n candidates (the first deterministic), run them, return (reply, result, votes) of the majority."""
     replies = await asyncio.gather(*(llm.chat(messages, model, temperature=0.0 if i == 0 else 0.7)
@@ -225,15 +208,18 @@ async def _vote(source_id: str, messages: list[dict], model: str, n: int, usage:
         except datasources.QueryError:
             return None
     results = await asyncio.gather(*(run_one(q) for _, _, q in runnable))
-    groups: dict[str, list] = {}
-    for (i, r, _), res in zip(runnable, results):
-        if res is not None:
-            groups.setdefault(_signature(res), []).append((i, r, res))
-    if not groups:  # nothing ran: continue with the deterministic candidate (error feedback loop)
+    ran = [(i, r, res) for (i, r, _), res in zip(runnable, results) if res is not None]
+    if not ran:  # nothing ran: continue with the deterministic candidate (error feedback loop)
         return ok[0], None, {"candidates": len(ok), "agreeing": 0, "distinct_results": 0}
-    best = max(groups.values(), key=lambda g: (len(g), -g[0][0]))  # ties: the deterministic candidate wins
-    _, reply, res = best[0]
-    return reply, res, {"candidates": len(ok), "agreeing": len(best), "distinct_results": len(groups)}
+    # Results agree when they hold the same answer, even if one query adds columns (an id, an email, ...).
+    support = [sum(compare.agree(a[2], b[2]) for b in ran) for a in ran]
+    best = max(range(len(ran)), key=lambda k: (support[k], -ran[k][0]))  # ties: the deterministic candidate wins
+    distinct: list[dict] = []
+    for _, _, res in ran:
+        if not any(compare.agree(res, d) for d in distinct):
+            distinct.append(res)
+    _, reply, res = ran[best]
+    return reply, res, {"candidates": len(ok), "agreeing": support[best], "distinct_results": len(distinct)}
 
 
 async def ask_events(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True,

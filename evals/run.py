@@ -24,54 +24,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from app import config, connectors, datasources, history, pipeline, sample_data
+from app.compare import results_match  # noqa: F401 - re-exported for tests and evals.benchmark
 
 HERE = Path(__file__).parent
-
-
-_NUMERIC = re.compile(r"^-?\d+(\.\d+)?$")
-
-
-def _norm(v):
-    if isinstance(v, str):
-        v = v.strip()
-        # engines disagree on types: SQLite strftime('%Y') gives '2023', EXTRACT/YEAR() give 2023
-        if _NUMERIC.match(v):
-            return float(v) if "." in v else int(v)
-        return v
-    if isinstance(v, bool):
-        return int(v)
-    return v
-
-
-def _same(a, b) -> bool:
-    """Numbers match within rounding tolerance (models often ROUND(x, 2)); everything else exactly."""
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return abs(a - b) <= max(0.01, 1e-4 * max(abs(a), abs(b)))
-    return a == b
-
-
-def _sort_key(v):
-    return (v is None, not isinstance(v, (int, float)), v if isinstance(v, (int, float)) else str(v))
-
-
-def _column(rows, i, ordered):
-    col = [_norm(r[i]) for r in rows]
-    return col if ordered else sorted(col, key=_sort_key)
-
-
-def results_match(gold: dict, pred: dict, ordered: bool) -> bool:
-    if gold["row_count"] != pred["row_count"]:
-        return False
-    pred_cols = [_column(pred["rows"], j, ordered) for j in range(len(pred["columns"]))]
-    used = set()
-    for i in range(len(gold["columns"])):
-        g = _column(gold["rows"], i, ordered)
-        match = next((j for j, c in enumerate(pred_cols)
-                      if j not in used and all(_same(x, y) for x, y in zip(g, c))), None)
-        if match is None:
-            return False
-        used.add(match)
-    return True
 
 
 def _is_ordered(sql: str) -> bool:

@@ -208,13 +208,33 @@ def get_schema(source_id: str, refresh: bool = False) -> dict:
     return schema
 
 
-def _fmt(v) -> str:
+_CONTROL = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]+")
+
+
+def prompt_safe(v, limit: int = 40) -> str:
+    """One-line, length-capped rendering of a database value for an LLM prompt.
+
+    Values come from the database and may contain text crafted to look like instructions; collapsing
+    newlines keeps each value inside its own comment line, and truncation bounds what it can say.
+    """
     if v is None:
         return "NULL"
     if isinstance(v, bytes):
         return "<blob>"
-    s = str(v)
-    return s if len(s) <= 40 else s[:37] + "..."
+    s = neutralize_tags(_CONTROL.sub(" ", str(v)).strip())
+    return s if len(s) <= limit else s[: limit - 3] + "..."
+
+
+_TAG = re.compile(r"<(?=/?\s*(schema|result|examples|notes)\b)", re.I)
+
+
+def neutralize_tags(text: str) -> str:
+    """Stop database text from opening or closing the <schema>/<result>/... fences used in prompts."""
+    return _TAG.sub("‹", text)
+
+
+def _fmt(v) -> str:
+    return prompt_safe(v)
 
 
 def schema_prompt(source_id: str, max_chars: int = 24000, tables: list[str] | None = None) -> str:
@@ -227,15 +247,15 @@ def schema_prompt(source_id: str, max_chars: int = 24000, tables: list[str] | No
             block.append(f"-- rows: {t['row_count']}")
         if t["value_hints"]:
             for col, vals in t["value_hints"].items():
-                block.append(f"-- {col} values: " + ", ".join(repr(v) for v in vals))
+                block.append(f"-- {prompt_safe(col, 80)} values: " + ", ".join(repr(prompt_safe(v, 120)) for v in vals))
         if t["samples"]:
             block.append("-- sample rows (" + ", ".join(c["name"] for c in t["columns"]) + "):")
             for r in t["samples"]:
                 block.append("--   " + " | ".join(_fmt(v) for v in r))
         parts.append("\n".join(block))
-    text = "\n\n".join(parts)
+    text = neutralize_tags("\n\n".join(parts))
     if len(text) > max_chars:  # very wide schemas: drop samples/hints, keep DDL
-        text = "\n\n".join(t["ddl"].strip() + ";" for t in selected)[:max_chars]
+        text = neutralize_tags("\n\n".join(t["ddl"].strip() + ";" for t in selected))[:max_chars]
     return text
 
 

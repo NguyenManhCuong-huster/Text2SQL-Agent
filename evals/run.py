@@ -101,7 +101,7 @@ async def run_case(case: dict, model: str, sem: asyncio.Semaphore, source: str =
     async with sem:
         t = time.perf_counter()
         try:
-            out = await pipeline.ask(source, case["question"], model, [])
+            out = await pipeline.ask(source, case["question"], model, [], use_cache=False)
         except Exception as e:  # network / provider errors count as failures
             out = {"status": "error", "error": str(e), "sql": None, "result": None, "attempts": [], "cost": 0, "tokens": 0}
         latency = time.perf_counter() - t

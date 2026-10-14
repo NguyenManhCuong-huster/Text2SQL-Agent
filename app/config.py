@@ -46,6 +46,9 @@ SCHEMA_SELECT_CHARS = int(os.getenv("SCHEMA_SELECT_CHARS", "16000"))
 
 # Number of user-confirmed question/SQL examples (feedback "Correct") added to the prompt; 0 = off.
 FEW_SHOT_K = int(os.getenv("FEW_SHOT_K", "3"))
+# Repeated questions reuse the stored SQL (re-executed for fresh data) instead of calling the LLM again.
+# Answers confirmed correct are reused regardless of age; others for CACHE_TTL_S seconds. 0 = off.
+CACHE_TTL_S = int(os.getenv("CACHE_TTL_S", "86400"))
 
 SOURCES_DIR.mkdir(parents=True, exist_ok=True)
 

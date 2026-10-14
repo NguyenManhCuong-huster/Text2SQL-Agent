@@ -177,7 +177,22 @@ async def select_tables(source_id: str, question: str, context: list[dict], mode
     return list(dict.fromkeys(picked + neighbours))
 
 
-async def ask_events(source_id: str, question: str, model: str, context: list[dict]):
+def _norm_question(q: str) -> str:
+    return " ".join(fewshot.fold(q).split()).rstrip("?.!。 ")
+
+
+def cached_answer(source_id: str, question: str, model: str) -> dict | None:
+    """A previous answer to the same question: confirmed correct (any model) first, else a recent one by this model."""
+    if config.CACHE_TTL_S <= 0:
+        return None
+    key = _norm_question(question)
+    hits = [h for h in history.recent_answers(source_id, config.CACHE_TTL_S) if _norm_question(h["question"]) == key]
+    confirmed = [h for h in hits if h["feedback"] == 1]
+    same_model = [h for h in hits if h["model"] == model]
+    return (confirmed or same_model or [None])[0]
+
+
+async def ask_events(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True):
     """Async generator of progress events; the last one has type 'result' with the full outcome."""
     started = time.perf_counter()
     usage = _Usage()
@@ -185,14 +200,29 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
     tables = None
     result = sql = None
     explanation, error = "", None
+    examples: list[dict] = []
 
     def finish(status: str, **kw) -> dict:
         out = {"type": "result", "status": status, "sql": sql, "explanation": explanation, "result": None,
                "error": None, "attempts": attempts, "model": model, "tokens": usage.tokens,
-               "cost": round(usage.cost, 6), "tables_used": tables, "examples_used": len(examples)}
+               "cost": round(usage.cost, 6), "tables_used": tables, "examples_used": len(examples),
+               "cached": None}
         out.update(kw)
         out["duration_ms"] = round((time.perf_counter() - started) * 1000)
         return out
+
+    if use_cache and not context:
+        hit = cached_answer(source_id, question, model)
+        if hit:
+            yield {"type": "step", "message": "Same question answered before – re-running its SQL…"}
+            try:
+                result = await asyncio.to_thread(datasources.execute, source_id, hit["sql"])
+                sql, explanation = hit["sql"], hit["explanation"] or ""
+                yield {"type": "sql", "sql": sql, "attempt": 1}
+                yield finish("ok", result=result, cached={"history_id": hit["id"], "verified": hit["feedback"] == 1})
+                return
+            except datasources.QueryError:
+                pass  # schema or policy changed since: generate a new query
 
     yield {"type": "step", "message": "Reading schema…"}
     examples = fewshot.find(source_id, question)
@@ -255,9 +285,9 @@ async def ask_events(source_id: str, question: str, model: str, context: list[di
         yield finish("ok", result=result)
 
 
-async def ask(source_id: str, question: str, model: str, context: list[dict]) -> dict:
+async def ask(source_id: str, question: str, model: str, context: list[dict], use_cache: bool = True) -> dict:
     final = None
-    async for event in ask_events(source_id, question, model, context):
+    async for event in ask_events(source_id, question, model, context, use_cache):
         final = event
     final.pop("type", None)
     return final

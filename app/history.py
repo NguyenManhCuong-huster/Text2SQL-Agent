@@ -147,6 +147,16 @@ def set_starred(item_id: int, starred: bool) -> None:
         c.execute("UPDATE history SET starred = ? WHERE id = ?", (int(starred), item_id))
 
 
+def recent_answers(source_id: str, max_age_s: int, limit: int = 500) -> list[dict]:
+    """Successful answers on this source that were not marked wrong: confirmed ones of any age, others recent."""
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT id, question, sql, explanation, model, feedback FROM history "
+            "WHERE source_id = ? AND status = 'ok' AND sql IS NOT NULL AND COALESCE(feedback, 0) <> -1 "
+            "AND (feedback = 1 OR created_at >= datetime('now', ?)) ORDER BY id DESC LIMIT ?",
+            (source_id, f"-{int(max_age_s)} seconds", limit))]
+
+
 def confirmed_examples(source_id: str, limit: int = 1000) -> list[dict]:
     """Question/SQL pairs marked correct on this source, newest first."""
     with _conn() as c:

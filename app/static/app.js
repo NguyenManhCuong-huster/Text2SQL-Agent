@@ -287,7 +287,7 @@ function scrollToEl(el) {
   requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
-async function ask(question) {
+async function ask(question, { noCache = false } = {}) {
   question = question.trim();
   if (!question || state.busy || !state.sourceId) return;
   if (!state.config.key_configured) return toast("OPENROUTER_KEY is not configured on the server.", true);
@@ -320,7 +320,7 @@ async function ask(question) {
 
   try {
     const res = await askStream({
-      source_id: state.sourceId, question, model: currentModel(), context: state.context.slice(-4),
+      source_id: state.sourceId, question, model: currentModel(), context: state.context.slice(-4), no_cache: noCache,
     }, onEvent);
     renderResult(turn, question, res);
     if (res.status === "ok" && res.sql) {
@@ -359,6 +359,14 @@ function renderResult(turn, question, res) {
     p.className = "muted small";
     p.style.margin = "0";
     p.textContent = `Schema narrowed to: ${res.tables_used.join(", ")}`;
+    body.appendChild(p);
+  }
+  if (res.cached) {
+    const p = document.createElement("p");
+    p.className = "muted small";
+    p.style.margin = "0";
+    p.innerHTML = `${res.cached.verified ? "Reused a verified answer" : "Reused the SQL of an earlier answer"} to this question (fresh data, no LLM cost). <button class="link-btn small" type="button">Regenerate</button>`;
+    $("button", p).onclick = () => ask(question, { noCache: true });
     body.appendChild(p);
   }
   if (res.examples_used) {

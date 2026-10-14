@@ -205,3 +205,34 @@ def test_similarity_basics():
     from app.examples import features, similarity
     assert similarity(features("Top 5 customers by revenue"), features("top 5 customers by revenue")) == 1.0
     assert similarity(features("Top 5 customers by revenue"), features("weather in Hanoi")) == 0.0
+
+
+def test_repeated_question_reuses_sql(fake_llm, monkeypatch):
+    from app import history
+    monkeypatch.setattr(config, "CACHE_TTL_S", 3600)
+    fake_llm(sql_reply("SELECT COUNT(*) AS n FROM products", "Counting products."))
+    first = run(pipeline.ask("shop", "How many products  exist?", "m", []))
+    hid = history.add(source_id="shop", question="How many products  exist?", sql=first["sql"],
+                      explanation=first["explanation"], model="m", status="ok", error=None, row_count=1,
+                      attempts=1, duration_ms=1, tokens=1, cost=0)
+    try:
+        fake = fake_llm()  # no LLM call allowed
+        again = run(pipeline.ask("shop", "how many products exist", "m", []))
+        assert again["cached"] == {"history_id": hid, "verified": False} and again["tokens"] == 0
+        assert again["result"]["rows"] == first["result"]["rows"] and fake.calls == []
+        # another model does not reuse an unconfirmed answer, a confirmed one is reused by any model
+        fake_llm(sql_reply("SELECT 1"))
+        assert run(pipeline.ask("shop", "how many products exist", "other", []))["cached"] is None
+        history.set_feedback(hid, 1)
+        assert run(pipeline.ask("shop", "how many products exist", "other", []))["cached"]["verified"]
+        # follow-ups and no_cache always generate
+        fake_llm(sql_reply("SELECT 2"), sql_reply("SELECT 3"))
+        assert run(pipeline.ask("shop", "how many products exist", "m", [], use_cache=False))["cached"] is None
+        ctx = [{"question": "x", "sql": "SELECT 1"}]
+        assert run(pipeline.ask("shop", "how many products exist", "m", ctx))["cached"] is None
+        # marked wrong: never reused
+        history.set_feedback(hid, -1)
+        fake_llm(sql_reply("SELECT 4"))
+        assert run(pipeline.ask("shop", "how many products exist", "m", []))["cached"] is None
+    finally:
+        history.delete(item_id=hid)

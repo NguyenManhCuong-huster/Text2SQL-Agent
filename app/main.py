@@ -326,6 +326,7 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     model: str | None = Field(None, max_length=200)
     context: list[Turn] = Field(default_factory=list, max_length=10)
+    no_cache: bool = Field(False, description="always generate new SQL instead of reusing an earlier answer")
 
 
 def _record(req: AskRequest, model: str, out: dict) -> int:
@@ -344,7 +345,8 @@ async def ask(req: AskRequest, request: Request):
     _rate_limit(request)
     _audit(request, "ask")
     model = _model(req.model)
-    out = await pipeline.ask(req.source_id, req.question.strip(), model, [t.model_dump() for t in req.context])
+    out = await pipeline.ask(req.source_id, req.question.strip(), model, [t.model_dump() for t in req.context],
+                             use_cache=not req.no_cache)
     out["id"] = _record(req, model, out)
     return out
 
@@ -361,7 +363,8 @@ async def ask_stream(req: AskRequest, request: Request):
     async def events():
         audit.set_context(request_id, client_ip, "ask")  # the body runs in the response's own context
         try:
-            async for event in pipeline.ask_events(req.source_id, req.question.strip(), model, context):
+            async for event in pipeline.ask_events(req.source_id, req.question.strip(), model, context,
+                                                   use_cache=not req.no_cache):
                 if event["type"] == "result":
                     event["id"] = _record(req, model, event)
                 yield f"data: {json.dumps(event, default=str)}\n\n"

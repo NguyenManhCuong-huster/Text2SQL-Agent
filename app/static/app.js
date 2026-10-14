@@ -232,6 +232,7 @@ function renderSchema() {
       <button class="tbl-head" type="button">${ICON.chev}
         <span class="tbl-name">${esc(t.name)}</span>
         ${t.kind === "view" ? '<span class="badge view">VIEW</span>' : ""}
+        ${t.hidden_columns ? `<span class="badge hidden-cols" title="${t.hidden_columns} column(s) hidden by the access policy">−${t.hidden_columns}</span>` : ""}
         <span class="tbl-insert" data-insert="${esc(t.name)}" title="Insert into question">insert</span>
         <span class="tbl-count">${t.row_count != null ? t.row_count.toLocaleString() : ""}</span>
       </button>
@@ -788,6 +789,41 @@ function setupUpload() {
   };
 }
 
+// ------------------------------------------------------------------ source settings
+
+function setupSettings() {
+  const dlg = $("#settings-dialog");
+  $("#btn-source-settings").onclick = async () => {
+    const src = state.sources.find(s => s.id === state.sourceId);
+    if (!src) return;
+    $("#settings-error").textContent = "";
+    $("#settings-source-name").textContent = src.name;
+    try {
+      const s = await api(`/api/sources/${encodeURIComponent(src.id)}/settings`);
+      $("#settings-notes").value = s.notes || "";
+      $("#settings-hidden").value = (s.hidden || []).join("\n");
+      $("#settings-global").innerHTML = s.global_hidden.length
+        ? s.global_hidden.map(p => `<code>${esc(p)}</code>`).join(" ") : "(none)";
+      dlg.showModal();
+    } catch (e) { toast(e.message, true); }
+  };
+  $("#btn-settings-save").onclick = async () => {
+    const btn = $("#btn-settings-save");
+    btn.disabled = true;
+    try {
+      await api(`/api/sources/${encodeURIComponent(state.sourceId)}/settings`, {
+        method: "PUT",
+        json: { notes: $("#settings-notes").value, hidden: $("#settings-hidden").value.split("\n").map(s => s.trim()).filter(Boolean) },
+      });
+      dlg.close();
+      toast("Settings saved");
+      await loadSchema(false);
+    } catch (e) {
+      $("#settings-error").textContent = e.message;
+    } finally { btn.disabled = false; }
+  };
+}
+
 // ------------------------------------------------------------------ init
 
 function autosize(ta) {
@@ -930,6 +966,7 @@ async function init() {
   };
 
   setupUpload();
+  setupSettings();
   await loadSources();
   ta.focus();
 }

@@ -93,6 +93,14 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: v
 #schema-filter { flex: none; width: 100%; }
 #schema-filter:focus, .field input:focus, .source-row select:focus { border-color: var(--accent); }
 #source-meta { margin: 0; }
+.field textarea {
+  min-height: 96px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-2); outline: none; resize: vertical; line-height: 1.45; color: var(--text);
+}
+.field textarea.mono { font-family: var(--mono); font-size: 12px; }
+.field textarea:focus { border-color: var(--accent); }
+#settings-dialog { width: min(560px, calc(100vw - 32px)); }
+.badge.hidden-cols { background: var(--surface-2); color: var(--muted); }
 
 .schema-tree { overflow-y: auto; flex: 1; margin: 0 -8px; padding: 0 8px; }
 .tbl { border-radius: 8px; }

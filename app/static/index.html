@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
   <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
-  <link rel="stylesheet" href="/static/styles.css?v=1.6">
+  <link rel="stylesheet" href="/static/styles.css?v=1.7">
 </head>
 <body>
 <header class="topbar">
@@ -42,7 +42,10 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Data source</h2>
-        <button class="link-btn" id="btn-upload">+ Upload</button>
+        <span>
+          <button class="link-btn" id="btn-source-settings" title="Business notes and hidden columns">Settings</button>
+          <button class="link-btn" id="btn-upload">+ Upload</button>
+        </span>
       </div>
       <div class="source-row">
         <select id="source-select" aria-label="Data source"></select>
@@ -165,6 +168,26 @@
   </form>
 </dialog>
 
+<dialog id="settings-dialog">
+  <form method="dialog" id="settings-form">
+    <h2>Data source settings · <span id="settings-source-name"></span></h2>
+    <label class="field">Business notes for the model
+      <textarea id="settings-notes" maxlength="8000" placeholder="Revenue = SUM(quantity * unit_price * (1 - discount)), excluding cancelled orders.&#10;An active customer ordered in the last 90 days.&#10;&quot;DT&quot; means doanh thu (revenue)."></textarea>
+    </label>
+    <p class="muted small">Definitions, business rules and jargon. They are sent with every question on this source.</p>
+    <label class="field">Hidden tables and columns (one per line)
+      <textarea id="settings-hidden" class="mono" spellcheck="false" placeholder="customers.email&#10;customers.phone&#10;salaries&#10;*.national_id"></textarea>
+    </label>
+    <p class="muted small">Use <code>table</code> or <code>table.column</code>; <code>*</code> is a wildcard. Hidden objects are removed from what the model sees, and queries that read them are blocked.
+      Always hidden on every source: <span id="settings-global"></span></p>
+    <p class="error small" id="settings-error"></p>
+    <div class="dialog-actions">
+      <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
+      <button type="button" class="btn primary" id="btn-settings-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="login-dialog">
   <form id="login-form">
     <h2>Sign in to Text2SQL Studio</h2>
@@ -182,6 +205,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="/static/app.js?v=1.6"></script>
+<script src="/static/app.js?v=1.7"></script>
 </body>
 </html>

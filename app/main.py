@@ -450,6 +450,14 @@ def clear_history(source_id: str):
     return {"ok": True}
 
 
+@app.get("/api/stats")
+def get_stats(days: int = 30, source_id: str | None = None):
+    """Usage dashboard data: question outcomes, feedback, latency and LLM spend (all calls, per model and day)."""
+    out = history.stats(max(1, min(days, 365)), source_id)
+    out["daily_budget_usd"] = config.DAILY_BUDGET_USD
+    return out
+
+
 @app.get("/api/audit")
 def get_audit(source_id: str | None = None, status: Literal["ok", "error"] | None = None, limit: int = 200):
     """Every SQL statement executed for clients, newest first (AUDIT_RETENTION_DAYS)."""

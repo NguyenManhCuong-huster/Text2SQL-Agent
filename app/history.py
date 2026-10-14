@@ -243,6 +243,37 @@ def save_source_settings(source_id: str, settings: dict) -> None:
         c.execute("INSERT OR REPLACE INTO source_settings VALUES (?, ?)", (source_id, json.dumps(settings)))
 
 
+def stats(days: int, source_id: str | None = None) -> dict:
+    """Usage over the last `days` days: questions, accuracy signals, latency, LLM spend per model and per day."""
+    since = f"-{int(days)} days"
+    src_sql, src_args = (" AND source_id = ?", [source_id]) if source_id else ("", [])
+    with _conn() as c:
+        q = c.execute(
+            "SELECT COUNT(*) AS questions, "
+            "SUM(status = 'ok') AS ok, SUM(status = 'error') AS errors, SUM(status = 'unanswerable') AS unanswerable, "
+            "SUM(attempts > 1) AS self_corrected, SUM(feedback = 1) AS confirmed, SUM(feedback = -1) AS rejected, "
+            "AVG(duration_ms) AS avg_ms, SUM(COALESCE(cost, 0)) AS cost "
+            "FROM history WHERE created_at >= datetime('now', ?)" + src_sql, [since, *src_args]).fetchone()
+        by_day = [dict(r) for r in c.execute(
+            "SELECT date(created_at) AS day, COUNT(*) AS questions, SUM(status = 'ok') AS ok, "
+            "SUM(COALESCE(cost, 0)) AS cost FROM history WHERE created_at >= datetime('now', ?)" + src_sql +
+            " GROUP BY day ORDER BY day", [since, *src_args])]
+        by_model = [dict(r) for r in c.execute(
+            "SELECT model, COUNT(*) AS calls, SUM(prompt_tokens + completion_tokens) AS tokens, SUM(cost) AS cost "
+            "FROM llm_usage WHERE created_at >= datetime('now', ?) GROUP BY model ORDER BY cost DESC", (since,))]
+        failed = [dict(r) for r in c.execute(
+            "SELECT question, COUNT(*) AS n FROM history WHERE created_at >= datetime('now', ?) "
+            "AND (status <> 'ok' OR feedback = -1)" + src_sql + " GROUP BY question ORDER BY n DESC LIMIT 10",
+            [since, *src_args])]
+        llm_cost = c.execute("SELECT COALESCE(SUM(cost), 0) FROM llm_usage WHERE created_at >= datetime('now', ?)",
+                             (since,)).fetchone()[0]
+    totals = {k: (q[k] or 0) for k in q.keys()}
+    totals["avg_ms"] = round(totals["avg_ms"] or 0)
+    totals["success_rate"] = round(totals["ok"] / totals["questions"], 4) if totals["questions"] else None
+    return {"days": days, "totals": totals, "llm_cost_total": llm_cost, "today_cost": spent_today(),
+            "by_day": by_day, "by_model": by_model, "top_failed": failed}
+
+
 def drop_source(source_id: str) -> None:
     with _conn() as c:
         c.execute("DELETE FROM source_settings WHERE source_id = ?", (source_id,))

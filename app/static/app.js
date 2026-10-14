@@ -882,6 +882,53 @@ function setupSettings() {
   };
 }
 
+// ------------------------------------------------------------------ usage stats
+
+let statsChart = null;
+
+async function loadStats() {
+  const box = $("#stats-body");
+  box.innerHTML = '<div class="skeleton" style="height:160px"></div>';
+  try {
+    const s = await api(`/api/stats?days=${$("#stats-days").value}`);
+    const t = s.totals;
+    const usd = v => `$${(v || 0) < 0.01 ? (v || 0).toFixed(4) : (v || 0).toFixed(2)}`;
+    const pct = v => v == null ? "–" : `${Math.round(v * 100)}%`;
+    const tiles = [
+      ["Questions", t.questions.toLocaleString()],
+      ["Answered", pct(t.success_rate)],
+      ["Self-corrected", t.self_corrected],
+      ["Confirmed ✓ / ✗", `${t.confirmed} / ${t.rejected}`],
+      ["Avg time", `${(t.avg_ms / 1000).toFixed(1)} s`],
+      ["LLM spend", usd(s.llm_cost_total)],
+      ["Today", usd(s.today_cost) + (s.daily_budget_usd ? ` / ${usd(s.daily_budget_usd)}` : "")],
+    ];
+    box.innerHTML = `<div class="tiles">${tiles.map(([k, v]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="k">${esc(k)}</div></div>`).join("")}</div>
+      ${s.by_day.length ? '<div><h3>Questions per day</h3><div class="chart-box"><canvas></canvas></div></div>' : ""}
+      ${s.by_model.length ? `<div><h3>LLM calls by model</h3><div class="table-wrap"><table class="data"><thead><tr><th>Model</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead>
+        <tbody>${s.by_model.map(m => `<tr><td>${esc(m.model)}</td><td class="num">${m.calls.toLocaleString()}</td><td class="num">${(m.tokens || 0).toLocaleString()}</td><td class="num">${usd(m.cost)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+      ${s.top_failed.length ? `<div><h3>Questions that failed or were marked wrong</h3><div class="table-wrap"><table class="data"><tbody>
+        ${s.top_failed.map(f => `<tr><td>${esc(f.question)}</td><td class="num">${f.n}×</td></tr>`).join("")}</tbody></table></div>
+        <p class="muted small">Add business notes in the data source settings to help with these.</p></div>` : ""}`;
+    statsChart?.destroy();
+    statsChart = null;
+    if (s.by_day.length && window.Chart) {
+      const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#4f46e5";
+      statsChart = new Chart($("canvas", box), {
+        type: "bar",
+        data: { labels: s.by_day.map(d => d.day), datasets: [
+          { label: "Answered", data: s.by_day.map(d => d.ok), backgroundColor: accent, borderRadius: 3, stack: "q" },
+          { label: "Not answered", data: s.by_day.map(d => d.questions - d.ok), backgroundColor: accent + "55", borderRadius: 3, stack: "q" },
+        ] },
+        options: { maintainAspectRatio: false, plugins: { legend: { display: true, position: "bottom" } },
+                   scales: { x: { grid: { display: false }, stacked: true }, y: { beginAtZero: true, stacked: true, ticks: { precision: 0 } } } },
+      });
+    }
+  } catch (e) {
+    box.innerHTML = `<p class="error small">${esc(e.message)}</p>`;
+  }
+}
+
 // ------------------------------------------------------------------ init
 
 function autosize(ta) {
@@ -1027,6 +1074,8 @@ async function init() {
 
   setupUpload();
   setupSettings();
+  $("#btn-stats").onclick = () => { $("#stats-dialog").showModal(); loadStats(); };
+  $("#stats-days").onchange = loadStats;
   await loadSources();
   ta.focus();
 }

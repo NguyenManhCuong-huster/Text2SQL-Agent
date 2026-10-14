@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
   <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
-  <link rel="stylesheet" href="/static/styles.css?v=1.11">
+  <link rel="stylesheet" href="/static/styles.css?v=1.12">
 </head>
 <body>
 <header class="topbar">
@@ -25,6 +25,9 @@
       <svg viewBox="0 0 24 24"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>
       <select id="model-select" aria-label="Model"></select>
     </label>
+    <button class="icon-btn" id="btn-stats" title="Usage" aria-label="Usage">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+    </button>
     <button class="icon-btn" id="btn-history" title="History" aria-label="History">
       <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3"/></svg>
     </button>
@@ -189,6 +192,19 @@
   </form>
 </dialog>
 
+<dialog id="stats-dialog">
+  <form method="dialog">
+    <div class="stats-head">
+      <h2>Usage</h2>
+      <select id="stats-days" aria-label="Period">
+        <option value="1">Today</option><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option>
+      </select>
+    </div>
+    <div id="stats-body"></div>
+    <div class="dialog-actions"><button value="close" class="btn ghost">Close</button></div>
+  </form>
+</dialog>
+
 <dialog id="login-dialog">
   <form id="login-form">
     <h2>Sign in to Text2SQL Studio</h2>
@@ -206,6 +222,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="/static/app.js?v=1.11"></script>
+<script src="/static/app.js?v=1.12"></script>
 </body>
 </html>

@@ -180,3 +180,13 @@ def test_feedback(client, fake_llm):
     assert item["feedback"] is None
     assert client.patch("/api/history/999999", json={"feedback": -1}).status_code == 404
     assert client.patch(f"/api/history/{out['id']}", json={"feedback": 5}).status_code == 422
+
+
+def test_stats(client, fake_llm):
+    fake_llm(sql_reply("SELECT 5 AS five"))
+    client.post("/api/ask", json={"source_id": "shop", "question": "stats question five", "no_cache": True})
+    st = client.get("/api/stats", params={"days": 7}).json()
+    assert st["totals"]["questions"] >= 1 and 0 <= st["totals"]["success_rate"] <= 1
+    assert st["by_day"] and {"day", "questions", "ok", "cost"} <= set(st["by_day"][-1])
+    assert "daily_budget_usd" in st and isinstance(st["by_model"], list)
+    assert client.get("/api/stats", params={"source_id": "nope"}).json()["totals"]["questions"] == 0

@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+data/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+.git/
+.vscode/
+.idea/
+*.sqlite
+*.db
+tests/
+evals/
+*.md
+!README.md

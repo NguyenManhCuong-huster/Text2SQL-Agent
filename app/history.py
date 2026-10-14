@@ -1,0 +1,156 @@
+"""Query history persisted in the app's own SQLite database."""
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+
+from . import config
+
+DDL = """
+CREATE TABLE IF NOT EXISTS history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id     TEXT NOT NULL,
+    question      TEXT NOT NULL,
+    sql           TEXT,
+    explanation   TEXT,
+    model         TEXT,
+    status        TEXT NOT NULL,     -- ok | error | unanswerable
+    error         TEXT,
+    row_count     INTEGER,
+    attempts      INTEGER,
+    duration_ms   REAL,
+    tokens        INTEGER,
+    cost          REAL,              -- USD reported by OpenRouter
+    starred       INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_history_source ON history(source_id, id DESC);
+CREATE TABLE IF NOT EXISTS connections (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    dialect       TEXT NOT NULL,     -- postgres | mysql
+    host          TEXT NOT NULL,
+    port          INTEGER NOT NULL,
+    database      TEXT NOT NULL,
+    user          TEXT NOT NULL,
+    password      TEXT NOT NULL,     -- stored locally in DATA_DIR/app.db; use a read-only DB user
+    db_schema     TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS suggestions (
+    source_id     TEXT PRIMARY KEY,
+    items         TEXT NOT NULL
+);
+"""
+
+
+_ready = False
+
+
+@contextmanager
+def _conn():
+    if not _ready:  # CLI tools and tests may use the store before the app's startup hook ran
+        init()
+    conn = sqlite3.connect(config.APP_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init() -> None:
+    global _ready
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(config.APP_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript(DDL)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(history)")}
+        if "cost" not in cols:  # migrate databases created by v1.0
+            conn.execute("ALTER TABLE history ADD COLUMN cost REAL")
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        os.chmod(config.APP_DB, 0o600)  # holds database connection passwords
+    except OSError:
+        pass
+    _ready = True
+
+
+def add(**fields) -> int:
+    cols = ", ".join(fields)
+    marks = ", ".join("?" for _ in fields)
+    with _conn() as c:
+        cur = c.execute(f"INSERT INTO history ({cols}) VALUES ({marks})", list(fields.values()))
+        return cur.lastrowid
+
+
+def list_(source_id: str | None, limit: int = 100, starred: bool = False) -> list[dict]:
+    q, args = "SELECT * FROM history WHERE 1=1", []
+    if source_id:
+        q += " AND source_id = ?"
+        args.append(source_id)
+    if starred:
+        q += " AND starred = 1"
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _conn() as c:
+        return [dict(r) for r in c.execute(q, args)]
+
+
+def set_starred(item_id: int, starred: bool) -> None:
+    with _conn() as c:
+        c.execute("UPDATE history SET starred = ? WHERE id = ?", (int(starred), item_id))
+
+
+def delete(item_id: int | None = None, source_id: str | None = None) -> None:
+    with _conn() as c:
+        if item_id is not None:
+            c.execute("DELETE FROM history WHERE id = ?", (item_id,))
+        elif source_id:
+            c.execute("DELETE FROM history WHERE source_id = ? AND starred = 0", (source_id,))
+
+
+def get_suggestions(source_id: str) -> list[str] | None:
+    with _conn() as c:
+        row = c.execute("SELECT items FROM suggestions WHERE source_id = ?", (source_id,)).fetchone()
+        return json.loads(row["items"]) if row else None
+
+
+def save_suggestions(source_id: str, items: list[str]) -> None:
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO suggestions VALUES (?, ?)", (source_id, json.dumps(items)))
+
+
+def drop_source(source_id: str) -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM history WHERE source_id = ?", (source_id,))
+        c.execute("DELETE FROM suggestions WHERE source_id = ?", (source_id,))
+
+
+_CONN_FIELDS = ("dialect", "host", "port", "database", "user", "password", "db_schema")
+
+
+def add_connection(conn_id: str, name: str, **fields) -> None:
+    with _conn() as c:
+        c.execute("INSERT INTO connections (id, name, dialect, host, port, database, user, password, db_schema) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (conn_id, name, *[fields[f] for f in _CONN_FIELDS]))
+
+
+def get_connection(conn_id: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM connections WHERE id = ?", (conn_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_connections() -> list[dict]:
+    with _conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM connections ORDER BY name")]
+
+
+def delete_connection(conn_id: str) -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM connections WHERE id = ?", (conn_id,))

@@ -1,0 +1,48 @@
+services:
+  text2sql:
+    build: .
+    image: text2sql-studio:latest
+    container_name: text2sql-studio
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    env_file:
+      - .env            # must contain OPENROUTER_KEY=...
+    environment:
+      DATA_DIR: /data
+      # OPENROUTER_MODEL: anthropic/claude-haiku-5.5
+      # MAX_ROWS: "1000"
+      # QUERY_TIMEOUT_S: "10"
+    volumes:
+      - text2sql-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach databases running on this machine (Linux; built into Docker Desktop)
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  # Optional demo PostgreSQL with a read-only "analyst" user (see README):
+  #   docker compose --profile demo up -d
+  #   docker compose run --rm text2sql python -m app.seed_external postgresql://postgres:demo@demo-postgres:5432/shopdb
+  # then in the app: Connect database -> host demo-postgres, port 5432, db shopdb, user analyst / analyst
+  demo-postgres:
+    profiles: ["demo"]
+    image: postgres:16-alpine
+    container_name: text2sql-demo-postgres
+    environment:
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: shopdb
+    volumes:
+      - demo-pg-data:/var/lib/postgresql/data
+      - ./demo/postgres-init.sql:/docker-entrypoint-initdb.d/10-analyst.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shopdb"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  text2sql-data:
+  demo-pg-data:

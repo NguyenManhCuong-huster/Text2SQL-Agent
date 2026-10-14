@@ -1,0 +1,42 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-5.5")
+AVAILABLE_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "OPENROUTER_MODELS",
+        "anthropic/claude-haiku-5.5,anthropic/claude-sonnet-5.5,openai/gpt-5.5,"
+        "google/gemini-3.8-flash,deepseek/deepseek-v4.1-flash",
+    ).split(",")
+    if m.strip()
+]
+if DEFAULT_MODEL not in AVAILABLE_MODELS:
+    AVAILABLE_MODELS.insert(0, DEFAULT_MODEL)
+
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR / "data"))
+SOURCES_DIR = DATA_DIR / "sources"
+APP_DB = DATA_DIR / "app.db"
+
+MAX_ROWS = int(os.getenv("MAX_ROWS", "1000"))
+QUERY_TIMEOUT_S = float(os.getenv("QUERY_TIMEOUT_S", "10"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "90"))
+# Above these sizes, an extra LLM step picks the relevant tables before SQL generation.
+SCHEMA_SELECT_MIN_TABLES = int(os.getenv("SCHEMA_SELECT_MIN_TABLES", "15"))
+SCHEMA_SELECT_CHARS = int(os.getenv("SCHEMA_SELECT_CHARS", "16000"))
+
+SOURCES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Security: set APP_PASSWORD to require a login. SECRET_KEY signs session cookies (auto-generated if unset).
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "20"))  # LLM calls per IP per minute, 0 = off

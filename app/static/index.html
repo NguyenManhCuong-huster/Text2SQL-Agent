@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Text2SQL Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><path d='M9 11c0-2 3-3 7-3s7 1 7 3-3 3-7 3-7-1-7-3zm0 0v10c0 2 3 3 7 3s7-1 7-3V11M9 16c0 2 3 3 7 3s7-1 7-3' stroke='white' stroke-width='2' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
+  <link rel="stylesheet" href="/static/styles.css?v=1.6">
+</head>
+<body>
+<header class="topbar">
+  <button class="icon-btn only-mobile" id="btn-sidebar" title="Schema" aria-label="Toggle schema">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
+  <div class="brand">
+    <span class="logo"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg></span>
+    <span class="brand-name">Text2SQL <b>Studio</b></span>
+  </div>
+  <div class="topbar-controls">
+    <label class="select-wrap" title="Model">
+      <svg viewBox="0 0 24 24"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>
+      <select id="model-select" aria-label="Model"></select>
+    </label>
+    <button class="icon-btn" id="btn-history" title="History" aria-label="History">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-theme" title="Toggle theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-logout" title="Log out" aria-label="Log out" hidden>
+      <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Data source</h2>
+        <button class="link-btn" id="btn-upload">+ Upload</button>
+      </div>
+      <div class="source-row">
+        <select id="source-select" aria-label="Data source"></select>
+        <button class="icon-btn small danger" id="btn-delete-source" title="Delete data source" aria-label="Delete data source">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+        </button>
+      </div>
+      <p class="muted small" id="source-meta"></p>
+    </section>
+    <section class="panel grow">
+      <div class="panel-head">
+        <h2>Schema</h2>
+        <span>
+          <button class="link-btn" id="btn-refresh-schema" title="Re-read the schema from the database" hidden>Refresh</button>
+          <button class="link-btn" id="btn-expand-all">Expand all</button>
+        </span>
+      </div>
+      <input type="search" id="schema-filter" placeholder="Filter tables & columns…" aria-label="Filter schema">
+      <div id="schema-tree" class="schema-tree"></div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div class="feed" id="feed">
+      <div class="empty" id="empty-state">
+        <div class="empty-icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg></div>
+        <h1>Ask your database anything</h1>
+        <p class="muted">Ask in plain English or Vietnamese. I'll write the SQL, run it read-only, fix it if it errors, and chart the results.</p>
+        <div class="chips" id="suggestions"></div>
+      </div>
+    </div>
+
+    <form class="composer" id="composer">
+      <div class="composer-box">
+        <textarea id="question" rows="1" placeholder="e.g. Monthly revenue by category in 2025" aria-label="Question"></textarea>
+        <button type="submit" class="send-btn" id="btn-send" aria-label="Send">
+          <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+      <div class="composer-foot">
+        <span class="muted small" id="context-hint"></span>
+        <label class="toggle small"><input type="checkbox" id="opt-summary" checked> Write a short answer</label>
+        <button type="button" class="link-btn small" id="btn-new-chat">New conversation</button>
+      </div>
+    </form>
+  </main>
+
+  <aside class="drawer" id="history-drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2>History</h2>
+      <div class="seg" id="history-tabs">
+        <button data-tab="all" class="active">All</button>
+        <button data-tab="starred">Starred</button>
+      </div>
+      <button class="icon-btn small" id="btn-close-history" aria-label="Close history">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="history-list" id="history-list"></div>
+    <div class="drawer-foot"><button class="link-btn danger small" id="btn-clear-history">Clear unstarred history</button></div>
+  </aside>
+</div>
+<div class="scrim" id="scrim"></div>
+
+<dialog id="upload-dialog">
+  <form method="dialog" id="upload-form">
+    <h2>Add a data source</h2>
+    <div class="seg" id="add-tabs">
+      <button type="button" data-tab="file" class="active">Upload file</button>
+      <button type="button" data-tab="db">Connect database</button>
+    </div>
+    <div id="pane-file" class="dialog-pane">
+      <p class="muted small">Upload one SQLite database (.sqlite, .db) or one or more CSV files — each CSV becomes a table.</p>
+      <label class="field">Name
+        <input type="text" id="upload-name" placeholder="my_dataset" maxlength="48">
+      </label>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="upload-files" multiple accept=".csv,.tsv,.txt,.sqlite,.sqlite3,.db">
+        <span id="dropzone-text">Drop files here or <u>browse</u></span>
+      </label>
+    </div>
+    <div id="pane-db" class="dialog-pane" hidden>
+      <p class="muted small">Queries run in a read-only transaction with a time limit. Still, prefer a database user that only has SELECT rights.
+        From Docker, reach a database on this computer via host <code>host.docker.internal</code>.</p>
+      <div class="grid2">
+        <label class="field">Type
+          <select id="db-dialect"></select>
+        </label>
+        <label class="field">Name
+          <input type="text" id="db-name" placeholder="sales_prod" maxlength="48">
+        </label>
+        <label class="field">Host
+          <input type="text" id="db-host" placeholder="host.docker.internal" maxlength="255">
+        </label>
+        <label class="field">Port
+          <input type="number" id="db-port" min="1" max="65535">
+        </label>
+        <label class="field">Database
+          <input type="text" id="db-database" maxlength="128">
+        </label>
+        <label class="field" id="db-schema-field">Schema
+          <input type="text" id="db-schema" placeholder="public (default)" maxlength="128">
+        </label>
+        <label class="field">User
+          <input type="text" id="db-user" autocomplete="off" maxlength="128">
+        </label>
+        <label class="field">Password
+          <input type="password" id="db-password" autocomplete="new-password" maxlength="512">
+        </label>
+      </div>
+      <p class="ok small" id="db-test-result"></p>
+    </div>
+    <p class="error small" id="upload-error"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="btn-db-test" hidden>Test connection</button>
+      <span class="spacer"></span>
+      <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
+      <button type="button" class="btn primary" id="btn-upload-submit">Upload</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="login-dialog">
+  <form id="login-form">
+    <h2>Sign in to Text2SQL Studio</h2>
+    <p class="muted small">This instance is password protected.</p>
+    <label class="field">Password
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </label>
+    <p class="error small" id="login-error"></p>
+    <div class="dialog-actions"><button type="submit" class="btn primary">Sign in</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/app.js?v=1.6"></script>
+</body>
+</html>

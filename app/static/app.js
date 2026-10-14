@@ -137,8 +137,9 @@ function toCSV(columns, rows) {
   return [columns.map(cell).join(","), ...rows.map(r => r.map(cell).join(","))].join("\r\n");
 }
 
-function download(filename, text) {
-  const blob = new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" });
+function download(filename, text, type = "text/csv") {
+  // The BOM makes Excel read UTF-8 CSV correctly; JSON parsers expect none.
+  const blob = new Blob([type === "text/csv" ? "﻿" + text : text], { type: `${type};charset=utf-8` });
   const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: filename });
   document.body.appendChild(a);
   a.click();
@@ -523,12 +524,15 @@ function renderData(container, r, meta) {
       <button data-tab="chart" ${chartable ? "" : "disabled title='Needs a numeric column and 2+ rows'"}>Chart</button>
     </div>
     <div class="result-meta">${parts.map(p => `<span>${p}</span>`).join("")}
-      <button class="tool-btn" data-act="csv">${ICON.download} CSV</button></div>`;
+      <button class="tool-btn" data-act="csv">${ICON.download} CSV</button>
+      <button class="tool-btn" data-act="json" title="Download as a JSON array of records">${ICON.download} JSON</button></div>`;
   container.appendChild(head);
   const pane = document.createElement("div");
   container.appendChild(pane);
 
   $('[data-act="csv"]', head).onclick = () => download(`query_${Date.now()}.csv`, toCSV(r.columns, r.rows));
+  $('[data-act="json"]', head).onclick = () => download(`query_${Date.now()}.json`,
+    JSON.stringify(r.rows.map(row => Object.fromEntries(r.columns.map((c, i) => [c, row[i]]))), null, 2), "application/json");
   $$(".seg button", head).forEach(b => b.onclick = () => {
     if (b.disabled) return;
     view.tab = b.dataset.tab;

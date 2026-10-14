@@ -190,3 +190,23 @@ def test_stats(client, fake_llm):
     assert st["by_day"] and {"day", "questions", "ok", "cost"} <= set(st["by_day"][-1])
     assert "daily_budget_usd" in st and isinstance(st["by_model"], list)
     assert client.get("/api/stats", params={"source_id": "nope"}).json()["totals"]["questions"] == 0
+
+
+def test_upload_json_and_jsonl(client):
+    doc = b'{"people": [{"name": "An", "age": 30, "tags": ["a"]}, {"name": "Binh", "age": 25.5, "vip": true}], "empty": []}'
+    lines = b'{"sku": "x1", "qty": 2}' + b"\n" + b'{"sku": "x2", "qty": 3}' + b"\n"
+    files = [("files", ("shop.json", doc, "application/json")), ("files", ("items.jsonl", lines, "application/x-ndjson"))]
+    sid = client.post("/api/sources", data={"name": "Json Data"}, files=files).json()["id"]
+    try:
+        tables = {t["name"]: t for t in client.get(f"/api/sources/{sid}/schema").json()["tables"]}
+        assert set(tables) == {"people", "items"}
+        types = {c["name"]: c["type"] for c in tables["people"]["columns"]}
+        assert types == {"name": "TEXT", "age": "REAL", "tags": "TEXT", "vip": "INTEGER"}
+        r = client.post("/api/execute", json={"source_id": sid, "sql": "SELECT SUM(qty) FROM items"}).json()
+        assert r["rows"] == [[5]]
+        r = client.post("/api/execute", json={"source_id": sid, "sql": "SELECT tags FROM people WHERE name = 'An'"}).json()
+        assert r["rows"] == [['["a"]']]
+    finally:
+        client.delete(f"/api/sources/{sid}")
+    bad = client.post("/api/sources", files=[("files", ("x.json", b"{oops", "application/json"))])
+    assert bad.status_code == 400 and "invalid JSON" in bad.json()["detail"]

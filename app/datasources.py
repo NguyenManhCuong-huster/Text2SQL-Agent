@@ -4,6 +4,7 @@ Every function takes a source id and dispatches on its kind, so the pipeline and
 """
 import csv
 import io
+import json
 import re
 import sqlite3
 import threading
@@ -406,7 +407,67 @@ def _unique_names(names: list[str]) -> list[str]:
     return out
 
 
-def import_csv_files(name: str, files: list[tuple[str, bytes]]) -> str:
+TABLE_FILE_EXTS = {".csv", ".tsv", ".txt", ".json", ".jsonl", ".ndjson"}
+
+
+def _parse_csv(text: str) -> list[tuple[str, list[str], list[str], list[list]]]:
+    try:
+        dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    all_rows = list(csv.reader(io.StringIO(text), dialect))
+    if not all_rows:
+        return []
+    header = _unique_names(all_rows[0])
+    body = [r + [""] * (len(header) - len(r)) for r in all_rows[1:]]
+    body = [r[: len(header)] for r in body]
+    types = [_infer_type([r[i] for r in body]) for i in range(len(header))]
+    return [("", header, types, [[_convert(v, t) for v, t in zip(r, types)] for r in body])]
+
+
+def _json_value(v):
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    return v
+
+
+def _records_table(records: list) -> tuple[list[str], list[str], list[list]]:
+    """Columns = union of keys in first-seen order; nested values are stored as JSON text."""
+    records = [r if isinstance(r, dict) else {"value": r} for r in records]
+    keys = list(dict.fromkeys(k for r in records for k in r))
+    header = _unique_names([str(k) for k in keys])
+    rows = [[_json_value(r.get(k)) for k in keys] for r in records]
+    types = []
+    for i in range(len(keys)):
+        seen = [r[i] for r in rows if r[i] is not None]
+        if seen and all(isinstance(v, int) for v in seen):
+            types.append("INTEGER")
+        elif seen and all(isinstance(v, (int, float)) for v in seen):
+            types.append("REAL")
+        else:
+            types.append("TEXT")
+    return header, types, rows
+
+
+def _parse_json(text: str, lines: bool) -> list[tuple[str, list[str], list[str], list[list]]]:
+    """A list of records, an object of {table: [records]}, or JSON Lines (one record per line)."""
+    if lines:
+        data = [json.loads(line) for line in text.splitlines() if line.strip()]
+    else:
+        data = json.loads(text)
+    if isinstance(data, list):
+        return [("", *_records_table(data))] if data else []
+    if isinstance(data, dict):
+        if all(isinstance(v, list) for v in data.values()):
+            return [(str(k), *_records_table(v)) for k, v in data.items() if v]
+        return [("", *_records_table([data]))]
+    raise ValueError("JSON must be a list of records or an object of {table: [records]}.")
+
+
+def import_table_files(name: str, files: list[tuple[str, bytes]]) -> str:
+    """CSV/TSV and JSON/JSONL files: each file (or each key of a JSON object) becomes a table."""
     source_id = unique_id(name)
     path = config.SOURCES_DIR / f"{source_id}.sqlite"
     conn = sqlite3.connect(path)
@@ -414,41 +475,41 @@ def import_csv_files(name: str, files: list[tuple[str, bytes]]) -> str:
         used = set()
         for filename, data in files:
             text = data.decode("utf-8-sig", errors="replace")
+            ext = Path(filename).suffix.lower()
             try:
-                dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel
-            reader = csv.reader(io.StringIO(text), dialect)
-            all_rows = list(reader)
-            if not all_rows:
-                continue
-            header = _unique_names(all_rows[0])
-            body = [r + [""] * (len(header) - len(r)) for r in all_rows[1:]]
-            body = [r[: len(header)] for r in body]
-            types = [_infer_type([r[i] for r in body]) for i in range(len(header))]
-            table = slugify(Path(filename).stem)
-            if table[0].isdigit():
-                table = "t_" + table
-            base, k = table, 2
-            while table in used:
-                table, k = f"{base}_{k}", k + 1
-            used.add(table)
-            cols = ", ".join(f"{_qi(c)} {t}" for c, t in zip(header, types))
-            conn.execute(f"CREATE TABLE {_qi(table)} ({cols})")
-            placeholders = ", ".join("?" for _ in header)
-            conn.executemany(
-                f"INSERT INTO {_qi(table)} VALUES ({placeholders})",
-                ([_convert(v, t) for v, t in zip(r, types)] for r in body),
-            )
+                parsed = (_parse_json(text, lines=ext in (".jsonl", ".ndjson")) if ext in (".json", ".jsonl", ".ndjson")
+                          else _parse_csv(text))
+            except json.JSONDecodeError as e:
+                raise ValueError(f"{filename}: invalid JSON ({e.msg} at line {e.lineno}).")
+            for sub, header, types, rows in parsed:
+                table = _create_table(conn, used, sub or Path(filename).stem, header, types, rows)
+                used.add(table)
         conn.commit()
         if not used:
-            raise ValueError("No usable CSV content found.")
+            raise ValueError("No usable rows found in the uploaded files.")
     except Exception:
         conn.close()
         path.unlink(missing_ok=True)
         raise
     conn.close()
     return source_id
+
+
+import_csv_files = import_table_files  # backwards-compatible name
+
+
+def _create_table(conn, used: set, raw_name: str, header: list[str], types: list[str], rows: list[list]) -> str:
+    table = slugify(raw_name)
+    if table[0].isdigit():
+        table = "t_" + table
+    base, k = table, 2
+    while table in used:
+        table, k = f"{base}_{k}", k + 1
+    cols = ", ".join(f"{_qi(c)} {t}" for c, t in zip(header, types))
+    conn.execute(f"CREATE TABLE {_qi(table)} ({cols})")
+    placeholders = ", ".join("?" for _ in header)
+    conn.executemany(f"INSERT INTO {_qi(table)} VALUES ({placeholders})", rows)
+    return table
 
 
 def import_sqlite_file(name: str, data: bytes) -> str:

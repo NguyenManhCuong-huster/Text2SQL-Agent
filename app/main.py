@@ -289,12 +289,12 @@ async def upload_source(name: str = Form(""), files: list[UploadFile] = File(...
     name = name.strip() or Path(payload[0][0]).stem
     exts = {Path(fn).suffix.lower() for fn, _ in payload}
     try:
-        if exts <= {".csv", ".tsv", ".txt"}:
-            source_id = datasources.import_csv_files(name, payload)
+        if exts <= datasources.TABLE_FILE_EXTS:
+            source_id = datasources.import_table_files(name, payload)
         elif len(payload) == 1 and exts <= {".sqlite", ".sqlite3", ".db"}:
             source_id = datasources.import_sqlite_file(name, payload[0][1])
         else:
-            raise ValueError("Upload one .sqlite/.db file, or one or more .csv files.")
+            raise ValueError("Upload one .sqlite/.db file, or one or more .csv / .json / .jsonl files.")
     except (ValueError, UnicodeError) as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # malformed CSV etc.

@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
   <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
-  <link rel="stylesheet" href="/static/styles.css?v=1.12">
+  <link rel="stylesheet" href="/static/styles.css?v=1.13">
 </head>
 <body>
 <header class="topbar">
@@ -122,12 +122,12 @@
       <button type="button" data-tab="db">Connect database</button>
     </div>
     <div id="pane-file" class="dialog-pane">
-      <p class="muted small">Upload one SQLite database (.sqlite, .db) or one or more CSV files — each CSV becomes a table.</p>
+      <p class="muted small">Upload one SQLite database (.sqlite, .db), or one or more CSV / JSON / JSON Lines files — each file becomes a table (a JSON object of arrays gives one table per key).</p>
       <label class="field">Name
         <input type="text" id="upload-name" placeholder="my_dataset" maxlength="48">
       </label>
       <label class="dropzone" id="dropzone">
-        <input type="file" id="upload-files" multiple accept=".csv,.tsv,.txt,.sqlite,.sqlite3,.db">
+        <input type="file" id="upload-files" multiple accept=".csv,.tsv,.txt,.json,.jsonl,.ndjson,.sqlite,.sqlite3,.db">
         <span id="dropzone-text">Drop files here or <u>browse</u></span>
       </label>
     </div>
@@ -222,6 +222,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="/static/app.js?v=1.12"></script>
+<script src="/static/app.js?v=1.13"></script>
 </body>
 </html>

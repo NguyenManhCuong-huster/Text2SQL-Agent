@@ -1,6 +1,8 @@
 # Text2SQL Studio
 
-Ask questions about a database in plain English or Vietnamese: a built-in sample, your own SQLite/CSV files, or a live **PostgreSQL / MySQL** database. The app writes the SQL with an LLM (through OpenRouter), runs it read-only, fixes the query itself if it fails, and shows the result as a table, a chart, and a short written answer.
+Ask questions about a database in plain English or Vietnamese: a built-in sample, your own SQLite/CSV/JSON files, or a live **PostgreSQL / MySQL** database. The app writes the SQL with an LLM (OpenRouter, or any OpenAI-compatible server such as a local Ollama), runs it read-only, fixes the query itself if it fails, and shows the result as a table, a chart, and a short written answer.
+
+It also plugs into other tools: a REST API with API keys, a one-file Python client and CLI, and an **MCP server** for Claude Desktop, Claude Code and other agents.
 
 ## Architecture
 
@@ -24,7 +26,12 @@ browser ──► FastAPI (app/main.py)  ── auth middleware (optional passwo
 | `app/connectors.py` | PostgreSQL and MySQL support: connecting, reading the schema (columns, PK/FK, row counts, samples, categorical values) and running guarded read-only queries. |
 | `app/seed_external.py` | Copies the sample database into PostgreSQL or MySQL with real types (DATE, TIMESTAMP, NUMERIC, foreign keys). |
 | `app/llm.py` | Async OpenRouter client. Records tokens and cost, and can cap hidden reasoning (`reasoning.effort`). |
-| `app/auth.py` | Optional login with a single password (HMAC-signed cookie) and the rate limiters. |
+| `app/auth.py` | Optional login with a single password (HMAC-signed cookie), API keys, and the rate limiters. |
+| `app/policy.py` | Hidden tables/columns: removed from the schema the model sees, and enforced on every query. |
+| `app/examples.py` | Finds answers that users confirmed as correct and are similar to a new question (few-shot examples). |
+| `app/compare.py` | Compares result sets; used by cross-check voting and the benchmarks. |
+| `app/audit.py`, `app/crypto.py` | Audit log of executed SQL, and encryption of stored connection passwords. |
+| `clients/` | `text2sql_client.py` (Python client + CLI, standard library only) and `mcp_server.py` (MCP over stdio). |
 | `app/history.py` | Query history (with stars and cost) and cached suggestions. |
 | `app/sample_data.py` | Builds the deterministic `shop` e-commerce sample database (8 tables, ~24k rows, 2023–2025). |
 
@@ -43,6 +50,13 @@ browser ──► FastAPI (app/main.py)  ── auth middleware (optional passwo
 
 These checks are verified live: with the superuser account, 16 of 16 attack queries were blocked on both engines and the data was left intact.
 
+**On every engine:**
+- **Hidden tables and columns.** `HIDDEN_COLUMNS` (by default `*.password*`, `*.secret*`, `*.api_key*`, `*.access_token*`, `*.ssn`, `*.card_number*`, …) plus each source's own list (**Settings** in the sidebar). Hidden objects are removed from the schema, sample rows, value hints, keys and DDL that the model sees. A sqlglot check expands `*` against the real schema and rejects any query that reads them. On SQLite the authorizer also denies them, and returns NULL when they are read through a view.
+- **Prompt-injection hardening.** Values read from the database (samples, value hints, result rows) are kept on one line, length-capped, and stripped of anything that looks like a prompt fence. The schema and the results are fenced, and the model is told to treat their content as data only. Even a successful injection can only produce another read-only, policy-checked query.
+- **Audit log.** Every statement run for a client (generated, retried or hand-written, including blocked ones) is stored with request id, client IP, status and timing: `GET /api/audit`.
+- **Limits.** Per-IP limits on LLM calls (`RATE_LIMIT_PER_MIN`) and on hand-written SQL (`EXEC_RATE_LIMIT_PER_MIN`), and an optional daily LLM budget (`DAILY_BUDGET_USD`).
+- **Secrets.** Connection passwords are stored Fernet-encrypted with a key derived from `SECRET_KEY` (or `DATA_DIR/.secret`). API keys are compared in constant time.
+
 ## Features
 - Answers stream in step by step ("Writing SQL…", "Running query…", "Fixing the query…"), with a live SQL preview.
 - Chat-style feed with follow-up questions: the last 4 question/SQL pairs are sent as context, so you can ask "now only Electronics, by quarter".
@@ -56,6 +70,12 @@ These checks are verified live: with the superuser account, 16 of 16 attack quer
 - Schema explorer with PK/FK badges, row counts and a filter.
 - History drawer with stars, model switcher (or any custom OpenRouter model id), light/dark theme, and a mobile layout.
 - Optional password login and a per-IP rate limit on LLM calls.
+- **Getting more accurate with use:** mark an answer **Correct** or **Wrong**. Correct question/SQL pairs (including SQL you fixed by hand) are added as examples when someone asks a similar question. Matching works for Vietnamese with or without diacritics.
+- **Business notes per data source** (Settings): metric definitions and jargon, for example "revenue excludes cancelled orders", are sent with every question.
+- **Cross-check** toggle: the model writes 3 candidate queries, all of them run, and the answer most of them agree on wins. Disagreement is shown, as a sign that the question is ambiguous.
+- **Repeated questions are free:** the stored SQL is run again for fresh data, with no LLM call. Use **Regenerate** to force new SQL.
+- **Usage** dialog: answered rate, self-corrections, feedback, latency, LLM spend per model and per day, and the questions that fail most often.
+- Upload JSON / JSON Lines as well as CSV and SQLite, and export results as CSV or JSON.
 
 ## Accuracy benchmark
 
@@ -86,11 +106,58 @@ The same 36 questions asked against the **PostgreSQL and MySQL copies**. Gold an
 python -m evals.run --db-url postgresql://analyst:ropass@localhost:5432/shopdb --models anthropic/claude-haiku-5.5
 ```
 
+**Public benchmarks (BIRD, Spider).** `evals/benchmark.py` runs them through the same pipeline. It reports the official strict execution accuracy (the predicted rows equal the gold rows as a set) next to the lenient score above, and keeps its databases in a separate `DATA_DIR` (`data/benchmarks/appdata`).
+```bash
+# BIRD dev: download https://bird-bench.oss-cn-beijing.aliyuncs.com/dev.zip into data/benchmarks/bird, unzip it and its dev_databases.zip
+python -m evals.benchmark --format bird --data data/benchmarks/bird/dev_20240627/dev.json \
+    --db-root data/benchmarks/bird/dev_20240627/dev_databases --limit 200 --models anthropic/claude-haiku-5.5
+```
+
+First results: a random sample of 60 BIRD dev questions (seed 7), `anthropic/claude-haiku-5.5`, 2026-10-14:
+
+| Setting | Strict EX | Lenient EX | simple | moderate | challenging | Cost / question |
+|---|---|---|---|---|---|---|
+| `style=friendly` (the UI's style) | 21.7% | 61.7% | 24.3% | 10.0% | 66.7% | $0.0007 |
+| `style=exact` (benchmark default) | **68.3%** | 68.3% | 75.7% | 50.0% | 100.0% | $0.0007 |
+| `style=exact`, `--candidates 3` | 68.3% | 66.7% | 75.7% | 55.0% | 66.7% | $0.0020 |
+
+- The friendly style adds name/id columns, rounds numbers and adds `LIMIT 100`. That helps people, but strict matching fails on the extra columns. Programs that consume results should use `style: "exact"`.
+- On this sample, voting did not improve accuracy and cost 3×. 60 questions are too few to judge, so run a larger sample before turning `CANDIDATES` on by default.
+- Several remaining "failures" come from the known noise in BIRD's gold SQL. For example, "the highest LDH in the normal range" is ordered ASC, and "posts created by" counts `postHistory` rows.
+
 What we learned:
 - With clearly worded questions, current models get every question right, so the real trade-off between them is cost and latency.
 - In the first run, every remaining failure came from **ambiguous wording**. One question said "which customers… count them", and another said "days between", which can mean whole calendar days or exact elapsed time. In one other case a model added a filter nobody asked for (`paid_at IS NOT NULL`). This is why the app always shows the assumptions it made next to the SQL.
 - Engines return different types for the same answer: `strftime('%Y')` gives the text `'2023'`, while `EXTRACT`/`YEAR()` give the integer `2023`. The scorer now treats numeric strings as numbers.
 - The scorer first rounded numbers to 1 decimal place, which failed correct answers whose values fell on a rounding boundary (1234.5501 vs `ROUND(x,2)`). It now compares numbers within a tolerance. `tests/test_evals.py` covers this case.
+
+## Integrate it
+
+**REST API with an API key.** Set `API_KEYS=key1,key2` and send `Authorization: Bearer key1` (or `X-API-Key`). With keys but no `APP_PASSWORD`, the deployment is API-only. Every response carries an `X-Request-ID`, which you can also set yourself and then find in the logs and the audit log.
+
+```bash
+curl -s localhost:8000/api/ask -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"source_id": "shop", "question": "Revenue by month in 2025"}'
+```
+
+**Python** (`clients/text2sql_client.py` is one file with no dependencies; copy it anywhere):
+```python
+from text2sql_client import Text2SQL
+t2s = Text2SQL("http://localhost:8000", api_key="...")
+out = t2s.ask("shop", "Top 5 customers by revenue")      # sql, explanation, result rows, id, cost
+t2s.feedback(out["id"], correct=True)                      # becomes an example for similar questions
+```
+```bash
+python clients/text2sql_client.py ask shop "Doanh thu theo tháng năm 2025"    # T2S_URL / T2S_API_KEY
+```
+
+**MCP (Claude Desktop, Claude Code, other agents).** The tools are `list_sources`, `get_schema`, `ask`, `run_sql` and `mark_answer`. Calls go through the HTTP API, so every safety check still applies.
+```json
+{"mcpServers": {"text2sql": {"command": "python", "args": ["/path/to/clients/mcp_server.py"],
+                             "env": {"T2S_URL": "http://localhost:8000", "T2S_API_KEY": "..."}}}}
+```
+
+**Local or private LLMs.** Point `LLM_URL` at any OpenAI-compatible endpoint, for example `http://localhost:11434/v1/chat/completions` for Ollama, with `OPENROUTER_MODEL=qwen2.5-coder:7b`. No key is needed, and no data leaves the machine.
 
 ## Run with Docker (recommended)
 
@@ -131,7 +198,7 @@ To use your own database running on this computer, enter host **`host.docker.int
 python -m venv .venv
 .venv/Scripts/pip install -r requirements-dev.txt   # Windows (use .venv/bin/pip on Linux/macOS)
 .venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
-.venv/Scripts/python -m pytest -q                   # ~130 tests, offline (the LLM is mocked)
+.venv/Scripts/python -m pytest -q                   # ~185 tests, offline (the LLM is mocked)
 # optional live tests against seeded databases:
 T2S_PG_URL=postgresql://... T2S_MYSQL_URL=mysql://... .venv/Scripts/python -m pytest -q tests/test_connectors.py
 ```
@@ -147,6 +214,15 @@ T2S_PG_URL=postgresql://... T2S_MYSQL_URL=mysql://... .venv/Scripts/python -m py
 | `SECRET_KEY` | auto-generated in `DATA_DIR/.secret` | Key that signs session cookies. |
 | `RATE_LIMIT_PER_MIN` | `20` | LLM requests per IP per minute, counted per worker (`0` turns it off). |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Proxies whose `X-Forwarded-For` header is trusted. |
+| `LLM_URL` | OpenRouter | Any OpenAI-compatible chat-completions URL (Ollama, vLLM, LM Studio, OpenAI). Local servers need no key. |
+| `API_KEYS` | *(empty)* | Comma-separated keys for programmatic access (`Authorization: Bearer …`). |
+| `HIDDEN_COLUMNS` | passwords, secrets, tokens, SSN, card numbers | Globs (`table` or `table.column`) hidden from the model and blocked in queries; empty = none. |
+| `EXEC_RATE_LIMIT_PER_MIN` | `60` | Hand-written SQL runs per IP per minute (`0` turns it off). |
+| `DAILY_BUDGET_USD` | `0` (off) | Stop LLM calls once today's spend (UTC) reaches this. |
+| `AUDIT_RETENTION_DAYS` | `90` | How long the audit log of executed SQL is kept (`0` = forever). |
+| `FEW_SHOT_K` | `3` | Confirmed examples added to the prompt (`0` turns it off). |
+| `CACHE_TTL_S` | `86400` | Reuse the SQL of a repeated question for this long (confirmed answers: always; `0` = off). |
+| `CANDIDATES` | `1` | Candidate queries voted on per question (1–5). The UI's Cross-check uses 3. |
 | `MAX_ROWS` | `1000` | Maximum rows returned per query. |
 | `QUERY_TIMEOUT_S` | `10` | Time limit for each SQL execution. |
 | `MAX_RETRIES` | `2` | Number of times the model may correct a failing query. |
@@ -159,12 +235,16 @@ T2S_PG_URL=postgresql://... T2S_MYSQL_URL=mysql://... .venv/Scripts/python -m py
 | Method | Path | |
 |---|---|---|
 | `POST` | `/api/ask/stream` | Server-sent events: `step` and `sql` progress events, then `result` (or `error`). |
-| `POST` | `/api/ask` | `{source_id, question, model?, context?[]}` → SQL, explanation, result, attempts, tokens, cost |
+| `POST` | `/api/ask` | `{source_id, question, model?, context?[], candidates?, no_cache?, style?: friendly|exact}` → SQL, explanation, result, attempts, tokens, cost, votes, cached |
 | `POST` | `/api/execute` | `{source_id, sql}` → runs edited SQL |
 | `POST` | `/api/answer` | Natural-language summary of a result |
 | `GET/POST/DELETE` | `/api/sources[...]` | List, upload or delete data sources; `/schema?refresh=true`, `/suggestions` |
 | `POST` | `/api/connections`, `/api/connections/test` | Add or test a PostgreSQL/MySQL connection |
-| `GET/PATCH/DELETE` | `/api/history[...]` | History and stars |
+| `GET/PATCH/DELETE` | `/api/history[...]` | History, stars and feedback (`{feedback: 1\|-1\|0, sql?}`) |
+| `GET/PUT` | `/api/sources/{id}/settings` | Business notes and hidden tables/columns of a source |
+| `GET` | `/api/stats?days=30` | Usage: outcomes, feedback, latency, LLM spend per model and day |
+| `GET` | `/api/audit` | Executed SQL statements (`source_id`, `status`, `limit` filters) |
+| `GET` | `/api/health`, `/api/ready` | Liveness; readiness (app store, sample DB, LLM key; 503 when degraded) |
 | `GET` `POST` `POST` | `/api/auth`, `/api/login`, `/api/logout` | Login status, sign in, sign out |
 
 Interactive docs are at `/docs`.

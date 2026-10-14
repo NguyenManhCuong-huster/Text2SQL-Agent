@@ -113,3 +113,4 @@ class RateLimiter:
 
 llm_limiter = RateLimiter(config.RATE_LIMIT_PER_MIN)
 login_limiter = RateLimiter(10)
+exec_limiter = RateLimiter(config.EXEC_RATE_LIMIT_PER_MIN)

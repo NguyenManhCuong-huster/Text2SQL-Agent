@@ -1,7 +1,9 @@
 """Minimal async client for OpenRouter or any OpenAI-compatible chat-completions endpoint."""
+import sqlite3
+
 import httpx
 
-from . import config
+from . import config, history
 
 
 class LLMError(Exception):
@@ -61,10 +63,15 @@ async def chat(messages: list[dict], model: str, temperature: float = 0.0, max_t
         raise LLMError("The model returned an empty response"
                        + (" (ran out of tokens while reasoning)." if reason == "length" else "."))
     usage = data.get("usage") or {}
-    return {
+    out = {
         "content": content,
         "model": data.get("model", model),
-        "prompt_tokens": usage.get("prompt_tokens", 0),
-        "completion_tokens": usage.get("completion_tokens", 0),
+        "prompt_tokens": usage.get("prompt_tokens") or 0,
+        "completion_tokens": usage.get("completion_tokens") or 0,
         "cost": usage.get("cost") or 0.0,
     }
+    try:  # every call counts toward DAILY_BUDGET_USD and the usage stats
+        history.add_llm_usage(model, out["prompt_tokens"], out["completion_tokens"], out["cost"])
+    except sqlite3.Error:
+        pass
+    return out

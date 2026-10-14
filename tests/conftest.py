@@ -9,6 +9,7 @@ os.environ["DATA_DIR"] = _tmp
 os.environ["OPENROUTER_KEY"] = "test-key"
 os.environ["APP_PASSWORD"] = ""
 os.environ["RATE_LIMIT_PER_MIN"] = "0"
+os.environ["EXEC_RATE_LIMIT_PER_MIN"] = "0"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest  # noqa: E402

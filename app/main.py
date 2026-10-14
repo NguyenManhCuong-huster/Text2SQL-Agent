@@ -79,10 +79,16 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _rate_limit(request: Request) -> None:
-    ok, retry = auth.llm_limiter.allow(_client_ip(request))
+def _rate_limit(request: Request, limiter: auth.RateLimiter | None = None) -> None:
+    """Per-IP limit; LLM calls (the default) are also stopped once DAILY_BUDGET_USD is spent."""
+    ok, retry = (limiter or auth.llm_limiter).allow(_client_ip(request))
     if not ok:
         raise HTTPException(429, f"Too many requests - try again in {retry}s.", headers={"Retry-After": str(retry)})
+    if limiter is None and config.DAILY_BUDGET_USD > 0:
+        spent = history.spent_today()
+        if spent >= config.DAILY_BUDGET_USD:
+            raise HTTPException(429, f"Daily LLM budget of ${config.DAILY_BUDGET_USD:g} reached (spent ${spent:.4f}). "
+                                     "It resets at midnight UTC.")
 
 
 def _audit(request: Request, kind: str) -> None:
@@ -344,6 +350,7 @@ class ExecuteRequest(BaseModel):
 @app.post("/api/execute")
 def execute(req: ExecuteRequest, request: Request):
     _check_source(req.source_id)
+    _rate_limit(request, auth.exec_limiter)
     _audit(request, "execute")
     try:
         return datasources.execute(req.source_id, req.sql)

@@ -146,3 +146,23 @@ def test_audit_log_records_every_statement(client, fake_llm):
     blocked = next(r for r in rows if r["request_id"] == "aud-2")
     assert blocked["kind"] == "execute" and blocked["status"] == "error" and "DELETE" in blocked["sql"]
     assert all(r["status"] == "error" for r in client.get("/api/audit", params={"status": "error"}).json())
+
+
+def test_execute_rate_limit(client, monkeypatch):
+    monkeypatch.setattr(auth, "exec_limiter", auth.RateLimiter(1))
+    body = {"source_id": "shop", "sql": "SELECT 1"}
+    assert client.post("/api/execute", json=body).status_code == 200
+    assert client.post("/api/execute", json=body).status_code == 429
+
+
+def test_daily_budget(client, monkeypatch, fake_llm):
+    from app import history
+    monkeypatch.setattr(config, "DAILY_BUDGET_USD", 0.5)
+    history.add_llm_usage("m", 1, 1, 0.6)
+    try:
+        r = client.post("/api/ask", json={"source_id": "shop", "question": "q"})
+        assert r.status_code == 429 and "budget" in r.json()["detail"]
+        assert client.post("/api/execute", json={"source_id": "shop", "sql": "SELECT 1"}).status_code == 200
+    finally:
+        with history._conn() as c:
+            c.execute("DELETE FROM llm_usage WHERE cost = 0.6")

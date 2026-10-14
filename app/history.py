@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS audit (
     duration_ms   REAL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit(created_at);
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    model             TEXT NOT NULL,
+    prompt_tokens     INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    cost              REAL NOT NULL      -- USD reported by the provider (0 for local models)
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at);
 CREATE TABLE IF NOT EXISTS suggestions (
     source_id     TEXT PRIMARY KEY,
     items         TEXT NOT NULL
@@ -173,6 +182,18 @@ def list_audit(source_id: str | None = None, status: str | None = None, limit: i
 def prune_audit(days: int) -> None:
     with _conn() as c:
         c.execute("DELETE FROM audit WHERE created_at < datetime('now', ?)", (f"-{int(days)} days",))
+
+
+def add_llm_usage(model: str, prompt_tokens: int, completion_tokens: int, cost: float) -> None:
+    with _conn() as c:
+        c.execute("INSERT INTO llm_usage (model, prompt_tokens, completion_tokens, cost) VALUES (?, ?, ?, ?)",
+                  (model, prompt_tokens, completion_tokens, cost))
+
+
+def spent_today() -> float:
+    """USD spent on LLM calls since midnight UTC."""
+    with _conn() as c:
+        return c.execute("SELECT COALESCE(SUM(cost), 0) FROM llm_usage WHERE created_at >= date('now')").fetchone()[0]
 
 
 def drop_source(source_id: str) -> None:

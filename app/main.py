@@ -31,7 +31,7 @@ async def lifespan(_: FastAPI):
     if not config.OPENROUTER_KEY:
         log.warning("OPENROUTER_KEY is not set - question answering will fail.")
     if not auth.enabled():
-        log.warning("APP_PASSWORD is not set - anyone who can reach this server can use it.")
+        log.warning("Neither APP_PASSWORD nor API_KEYS is set - anyone who can reach this server can use it.")
     yield
     await llm.close()
 
@@ -48,7 +48,7 @@ async def guard(request: Request, call_next):
     request.state.request_id = request_id
     started = time.perf_counter()
     if path.startswith("/api/") and path not in PUBLIC_API:
-        if auth.enabled() and not auth.valid_token(request.cookies.get(auth.COOKIE)):
+        if auth.enabled() and not auth.authenticated(request.cookies, request.headers):
             response = JSONResponse(status_code=401, content={"detail": "Login required."})
             response.headers["X-Request-ID"] = request_id
             return response
@@ -122,7 +122,7 @@ def ready():
 @app.get("/api/auth")
 def auth_status(request: Request):
     return {"required": auth.enabled(),
-            "authenticated": not auth.enabled() or auth.valid_token(request.cookies.get(auth.COOKIE))}
+            "authenticated": not auth.enabled() or auth.authenticated(request.cookies, request.headers)}
 
 
 class LoginRequest(BaseModel):
@@ -133,6 +133,8 @@ class LoginRequest(BaseModel):
 def login(req: LoginRequest, request: Request, response: Response):
     if not auth.enabled():
         return {"ok": True}
+    if not auth.password_enabled():
+        raise HTTPException(401, "Password login is disabled; use an API key.")
     ok, retry = auth.login_limiter.allow(_client_ip(request))
     if not ok:
         raise HTTPException(429, f"Too many login attempts - try again in {retry}s.")

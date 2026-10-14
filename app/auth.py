@@ -16,7 +16,34 @@ _secret: bytes | None = None
 
 
 def enabled() -> bool:
+    """Authentication is required as soon as a password or an API key is configured."""
+    return bool(config.APP_PASSWORD or config.API_KEYS)
+
+
+def password_enabled() -> bool:
     return bool(config.APP_PASSWORD)
+
+
+def valid_api_key(key: str | None) -> bool:
+    """Constant-time comparison against every configured key."""
+    if not key or not config.API_KEYS:
+        return False
+    digest = hashlib.sha256(key.encode()).digest()
+    ok = False
+    for k in config.API_KEYS:
+        ok |= hmac.compare_digest(digest, hashlib.sha256(k.encode()).digest())
+    return ok
+
+
+def request_api_key(headers) -> str | None:
+    authz = headers.get("authorization", "")
+    if authz[:7].lower() == "bearer ":
+        return authz[7:].strip()
+    return headers.get("x-api-key")
+
+
+def authenticated(cookies, headers) -> bool:
+    return valid_token(cookies.get(COOKIE)) or valid_api_key(request_api_key(headers))
 
 
 def _get_secret() -> bytes:
@@ -42,7 +69,7 @@ def _sign(payload: str) -> str:
 
 
 def check_password(password: str) -> bool:
-    return enabled() and hmac.compare_digest(password.encode(), config.APP_PASSWORD.encode())
+    return password_enabled() and hmac.compare_digest(password.encode(), config.APP_PASSWORD.encode())
 
 
 def issue_token() -> str:

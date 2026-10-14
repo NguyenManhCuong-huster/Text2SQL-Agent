@@ -40,3 +40,5 @@ SOURCES_DIR.mkdir(parents=True, exist_ok=True)
 APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "20"))  # LLM calls per IP per minute, 0 = off
+# Comma-separated keys for programmatic access: send "Authorization: Bearer <key>" or "X-API-Key: <key>".
+API_KEYS = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]

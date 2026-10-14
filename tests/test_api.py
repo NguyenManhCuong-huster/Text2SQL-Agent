@@ -122,3 +122,15 @@ def test_request_id_and_ready(client):
     assert len(r.headers["x-request-id"]) == 16
     ready = client.get("/api/ready").json()
     assert ready["status"] == "ok" and ready["checks"]["sample_db"] == "ok"
+
+
+def test_api_key_auth(client, monkeypatch):
+    monkeypatch.setattr(config, "API_KEYS", ["k-123", "k-456"])
+    client.cookies.clear()
+    assert client.get("/api/sources").status_code == 401
+    assert client.get("/api/sources", headers={"Authorization": "Bearer k-456"}).status_code == 200
+    assert client.get("/api/sources", headers={"X-API-Key": "k-123"}).status_code == 200
+    assert client.get("/api/sources", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert client.get("/api/auth", headers={"X-API-Key": "k-123"}).json()["authenticated"]
+    # keys alone: password login is not available
+    assert client.post("/api/login", json={"password": ""}).status_code == 401

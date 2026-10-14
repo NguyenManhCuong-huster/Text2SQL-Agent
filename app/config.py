@@ -55,3 +55,10 @@ API_KEYS = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()
 AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", "90"))  # 0 = keep forever
 EXEC_RATE_LIMIT_PER_MIN = int(os.getenv("EXEC_RATE_LIMIT_PER_MIN", "60"))  # /api/execute per IP per minute, 0 = off
 DAILY_BUDGET_USD = float(os.getenv("DAILY_BUDGET_USD", "0"))  # stop LLM calls once today's spend reaches this, 0 = off
+# Tables/columns hidden from the model and blocked in queries on every source (globs: table, table.column).
+# Each source can add its own patterns in its settings. Set HIDDEN_COLUMNS= (empty) to disable the defaults.
+HIDDEN_COLUMNS = [p.strip() for p in os.getenv(
+    "HIDDEN_COLUMNS",
+    "*.password*,*.passwd*,*.pwd,*.secret*,*.api_key*,*.apikey*,*.access_token*,*.refresh_token*,"
+    "*.ssn,*.credit_card*,*.card_number*,*.cvv",
+).split(",") if p.strip()]

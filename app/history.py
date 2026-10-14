@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     cost              REAL NOT NULL      -- USD reported by the provider (0 for local models)
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at);
+CREATE TABLE IF NOT EXISTS source_settings (
+    source_id     TEXT PRIMARY KEY,
+    settings      TEXT NOT NULL      -- JSON: {"hidden": ["table", "table.column", ...], "notes": "..."}
+);
 CREATE TABLE IF NOT EXISTS suggestions (
     source_id     TEXT PRIMARY KEY,
     items         TEXT NOT NULL
@@ -196,8 +200,20 @@ def spent_today() -> float:
         return c.execute("SELECT COALESCE(SUM(cost), 0) FROM llm_usage WHERE created_at >= date('now')").fetchone()[0]
 
 
+def get_source_settings(source_id: str) -> dict:
+    with _conn() as c:
+        row = c.execute("SELECT settings FROM source_settings WHERE source_id = ?", (source_id,)).fetchone()
+    return json.loads(row["settings"]) if row else {}
+
+
+def save_source_settings(source_id: str, settings: dict) -> None:
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO source_settings VALUES (?, ?)", (source_id, json.dumps(settings)))
+
+
 def drop_source(source_id: str) -> None:
     with _conn() as c:
+        c.execute("DELETE FROM source_settings WHERE source_id = ?", (source_id,))
         c.execute("DELETE FROM history WHERE source_id = ?", (source_id,))
         c.execute("DELETE FROM suggestions WHERE source_id = ?", (source_id,))
 

@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import audit, config, connectors, crypto, history
+from . import audit, config, connectors, crypto, history, policy
 
 SAMPLE_ID = "shop"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -86,6 +86,15 @@ def _authorizer(action, arg1, arg2, dbname, source):
     return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
 
 
+def _make_authorizer(pol: "policy.Policy"):
+    hidden = policy.sqlite_authorizer(pol)
+
+    def authorize(action, arg1, arg2, dbname, source):
+        verdict = hidden(action, arg1, arg2, dbname, source)
+        return verdict if verdict is not None else _authorizer(action, arg1, arg2, dbname, source)
+    return authorize
+
+
 def connect_ro(source_id: str) -> sqlite3.Connection:
     path = source_path(source_id)
     conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, check_same_thread=False)
@@ -134,6 +143,11 @@ def _qi(name: str) -> str:
 
 
 def get_schema(source_id: str, refresh: bool = False) -> dict:
+    """Schema as the model and the UI see it: hidden tables/columns (policy.py) are removed."""
+    return policy.filter_schema(raw_schema(source_id, refresh), policy.for_source(source_id))
+
+
+def raw_schema(source_id: str, refresh: bool = False) -> dict:
     """Structured schema with columns, keys, row counts, samples and low-cardinality value hints."""
     info = _conn_info(source_id)
     if info:
@@ -291,6 +305,13 @@ def _execute(source_id: str, sql: str, max_rows: int | None = None) -> dict:
     sql = clean_sql(sql)
     if not sql:
         raise QueryError("Empty query.")
+    if not exists(source_id):
+        raise QueryError(f"Unknown data source '{source_id}'.")
+    pol = policy.for_source(source_id)
+    try:
+        policy.check_sql(sql, dialect(source_id), raw_schema(source_id), pol)
+    except policy.PolicyError as e:
+        raise QueryError(str(e))
     info = _conn_info(source_id)
     if info:
         try:
@@ -306,7 +327,7 @@ def _execute(source_id: str, sql: str, max_rows: int | None = None) -> dict:
 
     deadline = time.monotonic() + config.QUERY_TIMEOUT_S
     conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10000)
-    conn.set_authorizer(_authorizer)
+    conn.set_authorizer(_make_authorizer(pol))
     start = time.perf_counter()
     try:
         cur = conn.execute(sql)
@@ -318,6 +339,8 @@ def _execute(source_id: str, sql: str, max_rows: int | None = None) -> dict:
         msg = str(e)
         if "interrupted" in msg:
             msg = f"Query exceeded the {config.QUERY_TIMEOUT_S:g}s time limit."
+        elif "prohibited" in msg:  # authorizer denied a hidden table/column
+            msg = "Not authorized: the query reads a restricted table or column."
         elif "not authorized" in msg or "readonly" in msg:
             msg = "Not authorized: only read-only queries are allowed."
         raise QueryError(msg)

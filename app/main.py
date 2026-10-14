@@ -226,6 +226,39 @@ def add_connection(req: ConnectionRequest):
     return {"id": source_id}
 
 
+class SourceSettings(BaseModel):
+    hidden: list[str] = Field(default_factory=list, max_length=500)
+    notes: str = Field("", max_length=8000)
+
+
+def _settings_view(source_id: str) -> dict:
+    stored = history.get_source_settings(source_id)
+    return {"hidden": stored.get("hidden", []), "notes": stored.get("notes", ""),
+            "global_hidden": config.HIDDEN_COLUMNS}
+
+
+@app.get("/api/sources/{source_id}/settings")
+def get_source_settings(source_id: str):
+    """Per-source access policy (hidden tables/columns) and notes for the model."""
+    _check_source(source_id)
+    return _settings_view(source_id)
+
+
+@app.put("/api/sources/{source_id}/settings")
+def put_source_settings(source_id: str, req: SourceSettings):
+    _check_source(source_id)
+    hidden = []
+    for p in req.hidden:
+        p = p.strip()
+        if not p:
+            continue
+        if len(p) > 200 or p.count(".") > 1:
+            raise HTTPException(422, f"Invalid pattern '{p[:50]}': use table or table.column (globs allowed).")
+        hidden.append(p)
+    history.save_source_settings(source_id, {"hidden": list(dict.fromkeys(hidden)), "notes": req.notes.strip()})
+    return _settings_view(source_id)
+
+
 @app.get("/api/sources/{source_id}/suggestions")
 async def suggestions(source_id: str, request: Request, model: str | None = None, refresh: bool = False):
     _check_source(source_id)

@@ -58,3 +58,35 @@ def test_client_end_to_end(base_url, fake_llm, monkeypatch, capsys):
 def test_format_table():
     text = t2s.format_table(["a", "bb"], [[1, None], [22, "x"]])
     assert text.splitlines()[0].startswith("a ") and "NULL" in text
+
+
+def test_mcp_server(base_url, fake_llm):
+    import io
+    import json
+    import mcp_server
+
+    server = mcp_server.Server(t2s.Text2SQL(base_url))
+    init = server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                          "params": {"protocolVersion": "2024-11-05", "capabilities": {}}})
+    assert init["result"]["protocolVersion"] == "2024-11-05" and "tools" in init["result"]["capabilities"]
+    assert server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
+    names = {t["name"] for t in server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]}
+    assert names == {"list_sources", "get_schema", "ask", "run_sql", "mark_answer"}
+
+    def call(name, **args):
+        return server.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                              "params": {"name": name, "arguments": args}})["result"]
+    assert "shop" in call("list_sources")["content"][0]["text"]
+    assert "customers" in call("get_schema", source_id="shop")["content"][0]["text"]
+    fake_llm(sql_reply("SELECT 11 AS eleven", "Eleven."))
+    text = call("ask", source_id="shop", question="mcp: eleven?")["content"][0]["text"]
+    assert "Eleven." in text and "SELECT 11" in text and "history_id=" in text
+    bad = call("run_sql", source_id="shop", sql="DELETE FROM orders")
+    assert bad["isError"] and "read-only" in bad["content"][0]["text"]
+    assert server.handle({"jsonrpc": "2.0", "id": 4, "method": "nope"})["error"]["code"] == -32601
+
+    # stdio framing: one JSON message per line
+    out = io.StringIO()
+    server.serve(io.StringIO('{"jsonrpc":"2.0","id":9,"method":"ping"}\nnot json\n'), out)
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert replies[0] == {"jsonrpc": "2.0", "id": 9, "result": {}} and replies[1]["error"]["code"] == -32700

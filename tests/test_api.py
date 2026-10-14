@@ -134,3 +134,15 @@ def test_api_key_auth(client, monkeypatch):
     assert client.get("/api/auth", headers={"X-API-Key": "k-123"}).json()["authenticated"]
     # keys alone: password login is not available
     assert client.post("/api/login", json={"password": ""}).status_code == 401
+
+
+def test_audit_log_records_every_statement(client, fake_llm):
+    fake_llm(sql_reply("SELECT nope FROM orders"), sql_reply("SELECT 42 AS answer"))
+    client.post("/api/ask/stream", json={"source_id": "shop", "question": "audit me"}, headers={"X-Request-ID": "aud-1"})
+    client.post("/api/execute", json={"source_id": "shop", "sql": "DELETE FROM orders"}, headers={"X-Request-ID": "aud-2"})
+    rows = client.get("/api/audit", params={"source_id": "shop"}).json()
+    ask_rows = [r for r in rows if r["request_id"] == "aud-1"]
+    assert [r["status"] for r in reversed(ask_rows)] == ["error", "ok"] and ask_rows[0]["kind"] == "ask"
+    blocked = next(r for r in rows if r["request_id"] == "aud-2")
+    assert blocked["kind"] == "execute" and blocked["status"] == "error" and "DELETE" in blocked["sql"]
+    assert all(r["status"] == "error" for r in client.get("/api/audit", params={"status": "error"}).json())

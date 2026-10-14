@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, connectors, crypto, history
+from . import audit, config, connectors, crypto, history
 
 SAMPLE_ID = "shop"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -255,6 +255,18 @@ def clean_sql(sql: str) -> str:
 
 
 def execute(source_id: str, sql: str, max_rows: int | None = None) -> dict:
+    """Run one read-only query; every attempt made during an API request is written to the audit log."""
+    started = time.perf_counter()
+    try:
+        out = _execute(source_id, sql, max_rows)
+    except QueryError as e:
+        audit.record(source_id, sql, "error", error=str(e), duration_ms=round((time.perf_counter() - started) * 1000, 1))
+        raise
+    audit.record(source_id, sql, "ok", row_count=out["row_count"], duration_ms=out["duration_ms"])
+    return out
+
+
+def _execute(source_id: str, sql: str, max_rows: int | None = None) -> dict:
     max_rows = max_rows or config.MAX_ROWS
     sql = clean_sql(sql)
     if not sql:

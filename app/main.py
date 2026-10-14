@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from . import auth, config, connectors, datasources, history, llm, pipeline, sample_data
+from . import audit, auth, config, connectors, datasources, history, llm, pipeline, sample_data
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
 log = logging.getLogger("text2sql")
@@ -27,6 +27,7 @@ _REQ_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     history.init()
+    audit.prune()
     sample_data.ensure_sample()
     if not config.llm_ready():
         log.warning("OPENROUTER_KEY is not set - question answering will fail.")
@@ -82,6 +83,10 @@ def _rate_limit(request: Request) -> None:
     ok, retry = auth.llm_limiter.allow(_client_ip(request))
     if not ok:
         raise HTTPException(429, f"Too many requests - try again in {retry}s.", headers={"Retry-After": str(retry)})
+
+
+def _audit(request: Request, kind: str) -> None:
+    audit.set_context(getattr(request.state, "request_id", ""), _client_ip(request), kind)
 
 
 def _model(model: str | None) -> str:
@@ -298,6 +303,7 @@ def _record(req: AskRequest, model: str, out: dict) -> int:
 async def ask(req: AskRequest, request: Request):
     _check_source(req.source_id)
     _rate_limit(request)
+    _audit(request, "ask")
     model = _model(req.model)
     out = await pipeline.ask(req.source_id, req.question.strip(), model, [t.model_dump() for t in req.context])
     out["id"] = _record(req, model, out)
@@ -311,8 +317,10 @@ async def ask_stream(req: AskRequest, request: Request):
     _rate_limit(request)
     model = _model(req.model)
     context = [t.model_dump() for t in req.context]
+    request_id, client_ip = getattr(request.state, "request_id", ""), _client_ip(request)
 
     async def events():
+        audit.set_context(request_id, client_ip, "ask")  # the body runs in the response's own context
         try:
             async for event in pipeline.ask_events(req.source_id, req.question.strip(), model, context):
                 if event["type"] == "result":
@@ -334,8 +342,9 @@ class ExecuteRequest(BaseModel):
 
 
 @app.post("/api/execute")
-def execute(req: ExecuteRequest):
+def execute(req: ExecuteRequest, request: Request):
     _check_source(req.source_id)
+    _audit(request, "execute")
     try:
         return datasources.execute(req.source_id, req.sql)
     except datasources.QueryError as e:
@@ -387,6 +396,12 @@ def delete_history(item_id: int):
 def clear_history(source_id: str):
     history.delete(source_id=source_id)
     return {"ok": True}
+
+
+@app.get("/api/audit")
+def get_audit(source_id: str | None = None, status: Literal["ok", "error"] | None = None, limit: int = 200):
+    """Every SQL statement executed for clients, newest first (AUDIT_RETENTION_DAYS)."""
+    return history.list_audit(source_id, status, max(1, min(limit, 1000)))
 
 
 # ---------------------------------------------------------------- UI

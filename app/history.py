@@ -37,6 +37,20 @@ CREATE TABLE IF NOT EXISTS connections (
     db_schema     TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS audit (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    request_id    TEXT,
+    client        TEXT,              -- client IP
+    kind          TEXT NOT NULL,     -- ask (model-generated) | execute (submitted by the client)
+    source_id     TEXT NOT NULL,
+    sql           TEXT NOT NULL,
+    status        TEXT NOT NULL,     -- ok | error
+    row_count     INTEGER,
+    error         TEXT,
+    duration_ms   REAL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit(created_at);
 CREATE TABLE IF NOT EXISTS suggestions (
     source_id     TEXT PRIMARY KEY,
     items         TEXT NOT NULL
@@ -134,6 +148,31 @@ def get_suggestions(source_id: str) -> list[str] | None:
 def save_suggestions(source_id: str, items: list[str]) -> None:
     with _conn() as c:
         c.execute("INSERT OR REPLACE INTO suggestions VALUES (?, ?)", (source_id, json.dumps(items)))
+
+
+def add_audit(**fields) -> None:
+    cols = ", ".join(fields)
+    with _conn() as c:
+        c.execute(f"INSERT INTO audit ({cols}) VALUES ({', '.join('?' for _ in fields)})", list(fields.values()))
+
+
+def list_audit(source_id: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
+    q, args = "SELECT * FROM audit WHERE 1=1", []
+    if source_id:
+        q += " AND source_id = ?"
+        args.append(source_id)
+    if status:
+        q += " AND status = ?"
+        args.append(status)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _conn() as c:
+        return [dict(r) for r in c.execute(q, args)]
+
+
+def prune_audit(days: int) -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM audit WHERE created_at < datetime('now', ?)", (f"-{int(days)} days",))
 
 
 def drop_source(source_id: str) -> None:
